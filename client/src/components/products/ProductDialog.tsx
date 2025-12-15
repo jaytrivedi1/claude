@@ -1,0 +1,363 @@
+import { useState, useEffect } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchableSelect, SearchableSelectItem } from "@/components/ui/searchable-select";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
+import { Product, insertProductSchema } from "@shared/schema";
+
+// Create Zod schema for form validation with improved handling for numeric values
+const productFormSchema = insertProductSchema.extend({
+  name: z.string().min(1, { message: "Name is required" }),
+  type: z.enum(["product", "service"]),
+  price: z.coerce.number().min(0),
+  isActive: z.boolean().default(true),
+  description: z.string().nullable().optional(),
+  sku: z.string().nullable().optional(),
+  // Use coerce to ensure these are always numbers
+  accountId: z.coerce.number().int().nonnegative()
+    .refine(val => val !== 0, { 
+      message: "Revenue Account is required" 
+    }),
+  salesTaxId: z.coerce.number().int().nonnegative(),
+});
+
+type ProductFormValues = z.infer<typeof productFormSchema>;
+
+interface ProductDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  product: Product | null;
+  defaultType?: "product" | "service";
+}
+
+export function ProductDialog({ open, onOpenChange, product, defaultType = "product" }: ProductDialogProps) {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+
+  // Get all revenue accounts for dropdown
+  const { data: accounts = [] } = useQuery({
+    queryKey: ['/api/accounts'],
+  });
+
+  // Get all sales taxes for dropdown
+  const { data: salesTaxes = [] } = useQuery({
+    queryKey: ['/api/sales-taxes'],
+  });
+
+  // Transform sales taxes for SearchableSelect (filter main taxes only)
+  const taxItems: SearchableSelectItem[] = salesTaxes.filter((tax: any) => !tax.parentId).map((tax: any) => ({
+    value: tax.id.toString(),
+    label: tax.name,
+    subtitle: tax.rate ? `· ${tax.rate}%` : undefined
+  }));
+
+  // Filter only revenue accounts - show only primary revenue accounts
+  // (excluding other income and liability accounts)
+  console.log("All accounts:", accounts);
+  const revenueAccounts = accounts.filter((account: any) => {
+    // Exclude liability accounts like "Sales Tax Payable"
+    if (account.type === 'liability' || 
+        account.type === 'accounts_payable' || 
+        account.type === 'other_current_liabilities' ||
+        account.type === 'long_term_liabilities') {
+      return false;
+    }
+    
+    // Exclude other_income accounts like "Interest Income"
+    if (account.type === 'other_income') {
+      return false;
+    }
+    
+    const isRevenueType = account.type === 'revenue' || 
+                         account.type === 'income';
+    
+    const isRevenueByName = typeof account.name === 'string' && (
+                           account.name.toLowerCase().includes('revenue') ||
+                           account.name.toLowerCase().includes('sales')) &&
+                           // Exclude accounts with these terms
+                           !account.name.toLowerCase().includes('tax payable') &&
+                           !account.name.toLowerCase().includes('interest');
+    
+    return isRevenueType || isRevenueByName;
+  });
+  
+  console.log("Filtered revenue accounts:", revenueAccounts);
+
+  // Transform revenue accounts for SearchableSelect
+  const revenueAccountItems: SearchableSelectItem[] = [
+    { value: "0", label: "Select a Revenue Account (Required)", subtitle: undefined },
+    ...revenueAccounts.map((account: any) => ({
+      value: account.id.toString(),
+      label: account.name,
+      subtitle: undefined
+    }))
+  ];
+
+  const form = useForm<ProductFormValues>({
+    resolver: zodResolver(productFormSchema),
+    defaultValues: {
+      name: "",
+      description: "",
+      type: defaultType,
+      price: 0,
+      isActive: true,
+      accountId: 0,
+      salesTaxId: 0,
+    },
+  });
+
+  // Update form when editing an existing product
+  useEffect(() => {
+    if (product) {
+      form.reset({
+        name: product.name,
+        description: product.description,
+        type: product.type,
+        sku: product.sku,
+        price: typeof product.price === 'string' ? parseFloat(product.price) : product.price,
+        cost: product.cost,
+        isActive: product.isActive,
+        accountId: product.accountId || 0,
+        salesTaxId: product.salesTaxId || 0,
+      });
+    } else {
+      form.reset({
+        name: "",
+        description: "",
+        type: defaultType,
+        price: 0,
+        isActive: true,
+        accountId: 0,
+        salesTaxId: 0,
+      });
+    }
+  }, [product, form]);
+
+  const onSubmit = async (data: ProductFormValues) => {
+    console.log("Form data before submission:", data);
+    setIsSubmitting(true);
+    try {
+      // Ensure consistent data format
+      const formattedData = {
+        ...data,
+        // Convert price to string for DB if needed
+        price: typeof data.price === 'number' ? data.price.toString() : data.price,
+        // Ensure accountId is a number
+        accountId: Number(data.accountId),
+        // Handle salesTaxId: if 0, set to null (no sales tax)
+        salesTaxId: data.salesTaxId === 0 ? null : Number(data.salesTaxId),
+      };
+
+      console.log("Formatted data for submission:", formattedData);
+
+      if (product) {
+        // Update existing product
+        await apiRequest(`/api/products/${product.id}`, 'PATCH', formattedData);
+        toast({
+          title: "Product updated",
+          description: "Product has been updated successfully.",
+        });
+      } else {
+        // Create new product
+        await apiRequest('/api/products', 'POST', formattedData);
+        toast({
+          title: "Product created",
+          description: "New product has been created successfully.",
+        });
+      }
+      // Refresh products data
+      queryClient.invalidateQueries({ queryKey: ['/api/products'] });
+      onOpenChange(false);
+    } catch (error) {
+      console.error("Error saving product:", error);
+      toast({
+        title: "Error",
+        description: product 
+          ? "Failed to update product. Please try again." 
+          : "Failed to create product. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[600px]">
+        <DialogHeader>
+          <DialogTitle>
+            {product 
+              ? `Edit ${product.type === "service" ? "Service" : "Product"}` 
+              : `Add New ${defaultType === "service" ? "Service" : "Product"}`}
+          </DialogTitle>
+          <DialogDescription>
+            {product 
+              ? `Update the details for this ${product.type === "service" ? "service" : "product"}.` 
+              : `Fill in the details to create a new ${defaultType === "service" ? "service" : "product"}.`}
+          </DialogDescription>
+        </DialogHeader>
+
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            {/* Product Name */}
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Name</FormLabel>
+                  <FormControl>
+                    <Input placeholder={`Enter ${product ? (product.type === "service" ? "service" : "product") : (defaultType === "service" ? "service" : "product")} name`} {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Description */}
+            <FormField
+              control={form.control}
+              name="description"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Description</FormLabel>
+                  <FormControl>
+                    <Textarea 
+                      placeholder="Enter description" 
+                      {...field} 
+                      value={field.value || ""}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Type is hidden and automatically set based on what option was selected */}
+            <input type="hidden" {...form.register("type")} />
+
+            {/* Price */}
+            <FormField
+              control={form.control}
+              name="price"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Price</FormLabel>
+                  <FormControl>
+                    <Input 
+                      type="number" 
+                      placeholder="0.00" 
+                      min="0" 
+                      step="0.01" 
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Revenue Account */}
+            <FormField
+              control={form.control}
+              name="accountId"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Revenue Account</FormLabel>
+                  <SearchableSelect
+                    items={revenueAccountItems}
+                    value={field.value?.toString() || "0"}
+                    onValueChange={(value) => field.onChange(Number(value))}
+                    placeholder="Select revenue account"
+                    searchPlaceholder="Search accounts..."
+                    emptyText="No accounts found."
+                  />
+                  <FormDescription>
+                    The revenue account where sales will be recorded
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Sales Tax */}
+            <FormField
+              control={form.control}
+              name="salesTaxId"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Sales Tax</FormLabel>
+                  <FormControl>
+                    <SearchableSelect
+                      items={taxItems}
+                      value={field.value?.toString() || "0"}
+                      onValueChange={(value) => field.onChange(Number(value))}
+                      placeholder="Select sales tax"
+                      searchPlaceholder="Search taxes..."
+                      emptyText="No taxes found."
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    The default sales tax applied to this {product ? (product.type === "service" ? "service" : "product") : (defaultType === "service" ? "service" : "product")}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            {/* Active Status */}
+            <FormField
+              control={form.control}
+              name="isActive"
+              render={({ field }) => (
+                <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+                  <div className="space-y-0.5">
+                    <FormLabel className="text-base">Active</FormLabel>
+                    <FormDescription>
+                      Inactive {product ? (product.type === "service" ? "services" : "products") : (defaultType === "service" ? "services" : "products")} won't appear in dropdown lists
+                    </FormDescription>
+                  </div>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => onOpenChange(false)}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting
+                  ? "Saving..."
+                  : product
+                  ? `Update ${product.type === "service" ? "Service" : "Product"}`
+                  : `Create ${defaultType === "service" ? "Service" : "Product"}`}
+              </Button>
+            </div>
+          </form>
+        </Form>
+      </DialogContent>
+    </Dialog>
+  );
+}

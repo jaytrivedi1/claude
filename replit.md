@@ -1,0 +1,124 @@
+# Vedo - Bookkeeping Application
+
+## Overview
+Vedo is a comprehensive full-stack bookkeeping application offering professional accounting features such as double-entry bookkeeping, invoicing, expense tracking, payment processing, and financial reporting. It supports multi-user environments with role-based permissions and integrates with external services like Shopify and Stripe. The project aims to provide a robust and scalable solution for managing business finances.
+
+## User Preferences
+Preferred communication style: Simple, everyday language.
+
+## System Architecture
+
+### Frontend
+- **Framework**: React with TypeScript using Vite
+- **Routing**: wouter
+- **UI Components**: shadcn/ui (Radix UI primitives)
+- **Styling**: Tailwind CSS
+- **State Management**: TanStack React Query
+- **Forms**: React Hook Form with Zod validation
+
+### Backend
+- **Framework**: Express.js with TypeScript
+- **API Design**: RESTful API
+- **Authentication**: Passport.js (local strategy, session-based)
+- **Database Layer**: Drizzle ORM with PostgreSQL
+- **File Structure**: Modular, with route handlers and storage abstraction
+
+### Database Design
+- **Primary Database**: PostgreSQL (Neon serverless)
+- **ORM**: Drizzle ORM
+- **Schema**: Double-entry accounting structure (accounts, transactions, ledger entries)
+- **Migrations**: Automated system
+- **Session Storage**: PostgreSQL-backed using `connect-pg-simple` for persistence
+- **Reconciliation**: Tables `reconciliations` and `reconciliation_items` to track sessions and cleared transactions.
+
+### Authentication & Authorization
+- **Session Management**: Express sessions
+- **User Roles**: Multi-company support with role-based permissions
+- **Security**: Password hashing (scrypt)
+- **Access Control**: Route-level authentication
+
+### Key Business Logic
+- **Double-Entry Accounting**: Automatic ledger entry generation.
+- **Invoice Management**: Full lifecycle with balance and payment application.
+- **Payment Processing**: Multiple methods, unified credit tracking, and `payment_applications` as a source of truth.
+- **Financial Reporting**: Real-time balance calculations and account books, including detailed, categorized Balance Sheets.
+- **Tax Management**: Configurable sales tax rates.
+- **Account Balance Calculation**: Real-time calculation based on ledger entries, differentiating between account types.
+- **Bank Transaction Matching**: Rule-based matching (amount, date, description, reference) with confidence scoring. Supports matching to single/multiple invoices/bills and allocating differences.
+  - **Match Types**: Invoice/Bill Match (creates payment), Manual Entry Link (links to existing), Manual Override (user categorization).
+  - **Multi-Match with Difference**: Allows splitting a bank transaction across multiple invoices/bills and allocating remaining amounts to specific income/expense accounts.
+- **Transaction Categorization Rules**: Automated rule-based categorization for imported bank transactions.
+  - Rules define conditions (description matching, amount ranges) and actions (assign account, contact, memo).
+  - Priority-based execution: rules are evaluated in order until first match.
+  - Auto-apply on import: rules automatically categorize transactions when synced via Plaid or uploaded via CSV.
+  - Manual application: "Apply Rules" button to categorize existing uncategorized transactions.
+  - Full CRUD: create, edit, enable/disable, delete, and reorder rules via UI.
+- **Inline Contact Creation**: All major forms (Invoice, Bill, Expense, Sales Receipt, Journal Entry) support creating customers and vendors on-the-fly through inline dialogs.
+  - **AddCustomerDialog** and **AddVendorDialog** components reuse existing form validation.
+  - New contacts are automatically selected after creation.
+  - Journal Entry forms show both customer and vendor creation options since the Name field can be either type.
+- **Inline Product Creation**: Invoice and Sales Receipt forms support creating products on-the-fly with automatic field population.
+  - Product dialog returns full product object to avoid stale closure issues.
+  - Newly created products are automatically selected in the form.
+- **Multi-Currency Support** (Core Features Complete - Tasks 1-12):
+  - **Database Schema**: 5 dedicated tables (currencies with 80 world currencies seeded, exchange_rates with unique daily rate constraint, fx_realizations, fx_revaluations, currency_locks)
+  - **Preferences**: One-time multi-currency enablement with locked home currency selection and timestamp tracking
+  - **Contacts**: Currency field on customers/vendors, automatically locked after first transaction to prevent changes
+  - **Transactions**: Currency, exchange_rate, and foreign_amount fields to support multi-currency transactions
+  - **Backend API**: Complete CRUD endpoints for currencies and exchange rates with Zod validation
+  - **Currency Settings UI**: SearchableSelect for home currency, one-time enablement enforcement, proper state management
+  - **Exchange Rates Manager**: Full CRUD interface with date-based rates, currency filtering, sorted listing, unique constraint preventing duplicate same-day pairs
+  - **Contact Forms**: Currency selectors in all customer/vendor creation/edit forms with automatic locking when transactions exist
+  - **Lock Prevention**: ContactEditForm queries `/api/contacts/:id/transactions` and disables currency field for both customers and vendors with existing transactions
+  - **Invoice/Bill Forms**: Full multi-currency integration with currency selector, exchange rate auto-fetch, foreign/home amount display, proper form initialization to homeCurrency
+  - **FX Accounts**: Realized FX Gain (4300, other_income) and Realized FX Loss (7100, other_expense) accounts created
+  - **Realized FX Gain/Loss**: Automatic calculation when payments are applied to foreign currency invoices at different exchange rates
+    - Compares invoice exchange rate with payment exchange rate (defaults to invoice rate if not provided)
+    - Formula: gainLossAmount = foreignAmountPaid × (paymentRate - invoiceRate)
+    - Records fx_realization entries with full context (transactionId, paymentId, rates, amounts, date)
+    - Creates ledger entries: gains debit AR + credit FX Gain; losses debit FX Loss + credit AR
+    - Production-ready for AR invoice payments
+  - **Unrealized FX Revaluation**: Month-end FX revaluation system to calculate and post unrealized gains/losses
+    - **Storage Method**: `getForeignCurrencyBalances()` calculates foreign currency balances by account type (AR, AP, Bank) with weighted average exchange rates
+    - **Preview Endpoint**: POST `/api/fx-revaluations/calculate` previews unrealized gains/losses by comparing original rates to revaluation date rates
+    - **Posting Endpoint**: POST `/api/fx-revaluations/post` creates journal entries posting unrealized FX gains/losses to AR/AP/Bank and FX Gain/Loss accounts
+    - **UI Page**: FX Revaluation page at `/fx-revaluation` with date selector, calculation preview table, and post button
+  - **Automatic Exchange Rate Updates**: Integration with ExchangeRate-API.com for automatic rate fetching
+    - **API Service**: `exchange-rate-service.ts` handles fetching rates from ExchangeRate-API.com based on home currency
+    - **Auto-Fetch on Demand**: GET `/api/exchange-rates/rate` endpoint automatically fetches from API if rate doesn't exist in database
+    - **Daily Startup Check**: Server fetches yesterday's exchange rates on startup (if multi-currency enabled and API key configured)
+    - **Configuration**: Requires `EXCHANGERATE_API_KEY` environment variable (free tier supports commercial use)
+    - **Rate Storage**: All fetched rates are stored in database with `effectiveDate`, `isManual=false` for audit trail
+  - **Editable Exchange Rates**: User-editable exchange rate functionality across all transaction forms
+    - **ExchangeRateInput Component**: Reusable component showing fetched exchange rate with edit/save/cancel UI
+    - **ExchangeRateUpdateDialog Component**: Modal asking users whether to update "this transaction only" or "all transactions on this date"
+    - **Backend Endpoint**: PUT `/api/exchange-rates` handles both update scopes with `isManual` flag
+    - **Form Integration**: Integrated into all transaction forms (Invoice, Bill, Expense, SalesReceipt, Cheque, Deposit, Transfer, JournalEntry)
+    - **Foreign Currency Detection**: Forms automatically detect foreign currency from contacts (Invoice/Bill/Expense/SalesReceipt) or accounts (Cheque/Deposit/Transfer/JournalEntry)
+    - **Update Scopes**: Transaction-only updates local state; all-on-date updates database and invalidates cache
+    - **User Experience**: Edit button triggers inline editing, save prompts for scope selection, toast notifications confirm updates
+  - **Status**: Complete multi-currency implementation with automatic exchange rate updates, user-editable rates across all forms, realized/unrealized FX gain/loss tracking, and comprehensive reporting
+
+## External Dependencies
+
+### Core Infrastructure
+- **Database**: Neon PostgreSQL
+- **File Storage**: Local file system
+
+### Payment Processing
+- **Stripe**: Payment processing via React Stripe.js.
+
+### Bank Integration
+- **Plaid Integration**: Secure bank account connection, transaction import, and real-time balance updates.
+- **CSV Upload Support**: Manual bank statement import with flexible column mapping and validation.
+
+### Development Tools
+- **Build System**: Vite
+- **Code Quality**: TypeScript, ESLint
+- **Database Tools**: Drizzle Kit
+
+### Third-Party Libraries
+- **PDF Generation**: jsPDF
+- **CSV Processing**: PapaParse
+- **Date Handling**: date-fns
+- **Validation**: Zod
