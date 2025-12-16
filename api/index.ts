@@ -27,7 +27,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end();
   }
 
-  const path = req.url?.replace('/api', '') || '';
+  // Get the path - handle various formats
+  const url = req.url || '';
+  const path = url.split('?')[0]; // Remove query string
 
   // Check DATABASE_URL
   if (!process.env.DATABASE_URL) {
@@ -38,12 +40,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     // Health check
-    if (path === '/health' || path === '/') {
-      return res.status(200).json({ status: 'ok', path: req.url });
+    if (path === '/api' || path === '/api/' || path === '/api/health') {
+      return res.status(200).json({ status: 'ok', url: req.url, method: req.method });
     }
 
-    // Login
-    if (path === '/login' && req.method === 'POST') {
+    // Login - match /api/login
+    if ((path === '/api/login' || path.endsWith('/login')) && req.method === 'POST') {
       const { username, password } = req.body || {};
 
       if (!username || !password) {
@@ -88,12 +90,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Get user (stub - would need session management)
-    if (path === '/user' && req.method === 'GET') {
+    // Get user
+    if ((path === '/api/user' || path.endsWith('/user')) && req.method === 'GET') {
       return res.status(401).json({ message: 'Not authenticated' });
     }
 
-    return res.status(404).json({ message: 'Not found', path });
+    return res.status(404).json({ message: 'Not found', path, url: req.url });
   } catch (error: any) {
     console.error('API Error:', error);
     return res.status(500).json({
