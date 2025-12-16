@@ -46,7 +46,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.0.0",
     "connect-pg-simple": "^10.0.0",
-    "date-fns": "^4.1.0",
+    "date-fns": "^3.6.0",
     "drizzle-orm": "^0.38.2",
     "embla-carousel-react": "^8.5.1",
     "express": "^4.21.2",
