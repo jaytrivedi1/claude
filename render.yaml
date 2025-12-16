@@ -1,0 +1,38 @@
+# Render Blueprint - Full-stack deployment
+# Deploy at: https://render.com/deploy
+
+services:
+  - type: web
+    name: vedo-bookkeeping
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_PUBLISHABLE_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: PLAID_CLIENT_ID
+        sync: false
+      - key: PLAID_SECRET
+        sync: false
+      - key: PLAID_ENV
+        value: sandbox
+      - key: AI_INTEGRATIONS_OPENAI_API_KEY
+        sync: false
+      - key: EXCHANGERATE_API_KEY
+        sync: false
+      - key: RADAR_API_KEY
+        sync: false
