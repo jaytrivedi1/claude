@@ -1,7 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { db } from '../server/db';
-import { usersSchema, userCompaniesSchema, companiesSchema } from '../shared/schema';
-import { eq, or } from 'drizzle-orm';
+import { neon } from '@neondatabase/serverless';
 import { scrypt, timingSafeEqual } from 'crypto';
 import { promisify } from 'util';
 
@@ -31,6 +29,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const path = req.url?.replace('/api', '') || '';
 
+  // Check DATABASE_URL
+  if (!process.env.DATABASE_URL) {
+    return res.status(500).json({ message: 'DATABASE_URL not configured' });
+  }
+
+  const sql = neon(process.env.DATABASE_URL);
+
   try {
     // Health check
     if (path === '/health' || path === '/') {
@@ -45,9 +50,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ message: 'Email and password are required' });
       }
 
-      const users = await db.select().from(usersSchema).where(
-        or(eq(usersSchema.email, username), eq(usersSchema.username, username))
-      );
+      // Query user directly with SQL
+      const users = await sql`
+        SELECT * FROM users
+        WHERE email = ${username} OR username = ${username}
+        LIMIT 1
+      `;
 
       if (users.length === 0) {
         return res.status(401).json({ message: 'Invalid credentials' });
@@ -55,7 +63,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const user = users[0];
 
-      if (!user.isActive) {
+      if (!user.is_active) {
         return res.status(401).json({ message: 'Account is disabled' });
       }
 
@@ -65,18 +73,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // Get user's companies
-      const userCompanies = await db.select({
-        company: companiesSchema
-      })
-      .from(userCompaniesSchema)
-      .innerJoin(companiesSchema, eq(userCompaniesSchema.companyId, companiesSchema.id))
-      .where(eq(userCompaniesSchema.userId, user.id));
+      const userCompanies = await sql`
+        SELECT c.* FROM user_companies uc
+        JOIN companies c ON uc.company_id = c.id
+        WHERE uc.user_id = ${user.id}
+      `;
 
+      // Don't send password to client
       const { password: _, ...userWithoutPassword } = user;
 
       return res.status(200).json({
         ...userWithoutPassword,
-        companies: userCompanies.map(uc => uc.company)
+        companies: userCompanies
       });
     }
 

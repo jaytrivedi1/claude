@@ -1,16 +1,9 @@
 import { Pool, neonConfig } from '@neondatabase/serverless';
 import { drizzle } from 'drizzle-orm/neon-serverless';
-import * as schema from "@shared/schema";
+import * as schema from "../shared/schema";
 
-// Only use WebSocket in non-serverless environments
-if (typeof process !== 'undefined' && process.env.VERCEL !== '1') {
-  try {
-    const ws = await import('ws');
-    neonConfig.webSocketConstructor = ws.default;
-  } catch {
-    // WebSocket not available, using HTTP mode (serverless)
-  }
-}
+// For serverless, we don't need WebSocket - Neon uses HTTP by default
+// WebSocket is only needed for persistent connections in long-running servers
 
 if (!process.env.DATABASE_URL) {
   throw new Error(
