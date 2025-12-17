@@ -251,6 +251,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
+    // Get sales taxes
+    if ((path === '/api/sales-taxes' || path.endsWith('/sales-taxes')) && req.method === 'GET') {
+      const salesTaxes = await sql`SELECT * FROM sales_taxes ORDER BY name`;
+      return res.status(200).json(salesTaxes);
+    }
+
+    // Get account balances report
+    if ((path === '/api/reports/account-balances' || path.endsWith('/account-balances')) && req.method === 'GET') {
+      const accounts = await sql`
+        SELECT id, code, name, type, currency, balance, is_active, cash_flow_category
+        FROM accounts
+        WHERE is_active = true
+        ORDER BY code, name
+      `;
+      return res.status(200).json(accounts);
+    }
+
+    // Get products
+    if ((path === '/api/products' || path.endsWith('/products')) && req.method === 'GET') {
+      const products = await sql`SELECT * FROM products WHERE is_active = true ORDER BY name`;
+      return res.status(200).json(products);
+    }
+
     return res.status(404).json({ message: 'Not found', path, url: req.url });
   } catch (error: any) {
     console.error('API Error:', error);
