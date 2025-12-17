@@ -1,6 +1,12 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { queryClient } from '@/lib/queryClient';
 
+interface Company {
+  id: number;
+  name: string;
+  [key: string]: any;
+}
+
 interface User {
   id: number;
   username: string;
@@ -13,6 +19,7 @@ interface User {
 
 interface AuthContextType {
   user: User | null;
+  companies: Company[];
   login: (username: string, password: string, rememberMe?: boolean) => Promise<void>;
   register: (username: string, password: string, email?: string, firstName?: string, lastName?: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -23,6 +30,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [companies, setCompanies] = useState<Company[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -31,13 +39,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const checkAuth = async () => {
     try {
-      const response = await fetch('/api/user', {
-        credentials: 'include',
-      });
-      
-      if (response.ok) {
-        const userData = await response.json();
-        setUser(userData);
+      // Check localStorage for saved session
+      const savedUser = localStorage.getItem('vedo_user');
+      const savedCompanies = localStorage.getItem('vedo_companies');
+
+      if (savedUser) {
+        setUser(JSON.parse(savedUser));
+        if (savedCompanies) {
+          setCompanies(JSON.parse(savedCompanies));
+        }
       }
     } catch (error) {
       console.error('Auth check failed:', error);
@@ -59,8 +69,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error(error.message || 'Login failed');
     }
 
-    const userData = await response.json();
+    const data = await response.json();
+    const { companies: userCompanies, ...userData } = data;
+
+    // Store in state
     setUser(userData);
+    setCompanies(userCompanies || []);
+
+    // Persist to localStorage
+    localStorage.setItem('vedo_user', JSON.stringify(userData));
+    localStorage.setItem('vedo_companies', JSON.stringify(userCompanies || []));
   };
 
   const register = async (
@@ -93,11 +111,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     // Clear all cached data to ensure fresh state for next user
     queryClient.clear();
+    localStorage.removeItem('vedo_user');
+    localStorage.removeItem('vedo_companies');
     setUser(null);
+    setCompanies([]);
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, register, logout, isLoading }}>
+    <AuthContext.Provider value={{ user, companies, login, register, logout, isLoading }}>
       {children}
     </AuthContext.Provider>
   );
