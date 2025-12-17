@@ -284,7 +284,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         WHERE is_active = true
         ORDER BY code, name
       `;
-      return res.status(200).json(transformKeys(accounts));
+      // Frontend expects { account: {...}, balance: number }[] format
+      const result = accounts.map((acc: any) => ({
+        account: transformKeys(acc),
+        balance: Number(acc.balance) || 0
+      }));
+      return res.status(200).json(result);
     }
 
     // Get products
