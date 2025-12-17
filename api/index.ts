@@ -227,6 +227,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(contacts);
     }
 
+    // Get preferences
+    if ((path === '/api/preferences' || path.endsWith('/preferences')) && req.method === 'GET') {
+      const prefs = await sql`SELECT * FROM preferences LIMIT 1`;
+      if (prefs.length > 0) {
+        return res.status(200).json(prefs[0]);
+      }
+      // Return defaults
+      return res.status(200).json({
+        homeCurrency: 'CAD',
+        dateFormat: 'MM/DD/YYYY',
+        theme: 'classic'
+      });
+    }
+
+    // Search endpoint (return empty for now)
+    if (path.startsWith('/api/search')) {
+      return res.status(200).json({
+        transactions: [],
+        contacts: [],
+        accounts: [],
+        products: []
+      });
+    }
+
     return res.status(404).json({ message: 'Not found', path, url: req.url });
   } catch (error: any) {
     console.error('API Error:', error);
