@@ -5,6 +5,25 @@ import { promisify } from 'util';
 
 const scryptAsync = promisify(scrypt);
 
+// Convert snake_case to camelCase
+function toCamelCase(str: string): string {
+  return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+}
+
+// Transform object keys from snake_case to camelCase
+function transformKeys(obj: any): any {
+  if (Array.isArray(obj)) {
+    return obj.map(transformKeys);
+  }
+  if (obj !== null && typeof obj === 'object') {
+    return Object.keys(obj).reduce((acc, key) => {
+      acc[toCamelCase(key)] = transformKeys(obj[key]);
+      return acc;
+    }, {} as any);
+  }
+  return obj;
+}
+
 async function verifyPassword(password: string, hashedPassword: string): Promise<boolean> {
   try {
     const [hash, salt] = hashedPassword.split('.');
@@ -206,7 +225,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Get accounts
     if ((path === '/api/accounts' || path.endsWith('/accounts')) && req.method === 'GET') {
       const accounts = await sql`SELECT * FROM accounts ORDER BY code, name`;
-      return res.status(200).json(accounts);
+      return res.status(200).json(transformKeys(accounts));
     }
 
     // Get transactions
@@ -218,20 +237,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ORDER BY t.date DESC
         LIMIT 100
       `;
-      return res.status(200).json(transactions);
+      return res.status(200).json(transformKeys(transactions));
     }
 
     // Get contacts
     if ((path === '/api/contacts' || path.endsWith('/contacts')) && req.method === 'GET') {
       const contacts = await sql`SELECT * FROM contacts ORDER BY name`;
-      return res.status(200).json(contacts);
+      return res.status(200).json(transformKeys(contacts));
     }
 
     // Get preferences
     if ((path === '/api/preferences' || path.endsWith('/preferences')) && req.method === 'GET') {
       const prefs = await sql`SELECT * FROM preferences LIMIT 1`;
       if (prefs.length > 0) {
-        return res.status(200).json(prefs[0]);
+        return res.status(200).json(transformKeys(prefs[0]));
       }
       // Return defaults
       return res.status(200).json({
@@ -254,7 +273,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Get sales taxes
     if ((path === '/api/sales-taxes' || path.endsWith('/sales-taxes')) && req.method === 'GET') {
       const salesTaxes = await sql`SELECT * FROM sales_taxes ORDER BY name`;
-      return res.status(200).json(salesTaxes);
+      return res.status(200).json(transformKeys(salesTaxes));
     }
 
     // Get account balances report
@@ -265,13 +284,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         WHERE is_active = true
         ORDER BY code, name
       `;
-      return res.status(200).json(accounts);
+      return res.status(200).json(transformKeys(accounts));
     }
 
     // Get products
     if ((path === '/api/products' || path.endsWith('/products')) && req.method === 'GET') {
       const products = await sql`SELECT * FROM products WHERE is_active = true ORDER BY name`;
-      return res.status(200).json(products);
+      return res.status(200).json(transformKeys(products));
     }
 
     return res.status(404).json({ message: 'Not found', path, url: req.url });
