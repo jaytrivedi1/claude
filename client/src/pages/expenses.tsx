@@ -133,7 +133,7 @@ export default function Expenses() {
             const query = searchQuery.toLowerCase();
             const contactName = getContactName(expense.contactId).toLowerCase();
             if (
-              !expense.reference.toLowerCase().includes(query) &&
+              !(expense.reference?.toLowerCase().includes(query) || false) &&
               !expense.description?.toLowerCase().includes(query) &&
               !contactName.includes(query)
             ) {
@@ -165,7 +165,7 @@ export default function Expenses() {
             const query = searchQuery.toLowerCase();
             const contactName = getContactName(bill.contactId).toLowerCase();
             if (
-              !bill.reference.toLowerCase().includes(query) &&
+              !(bill.reference?.toLowerCase().includes(query) || false) &&
               !bill.description?.toLowerCase().includes(query) &&
               !contactName.includes(query)
             ) {
