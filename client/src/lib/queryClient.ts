@@ -7,6 +7,19 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+function getUserIdFromStorage(): string | null {
+  try {
+    const savedUser = localStorage.getItem('vedo_user');
+    if (savedUser) {
+      const user = JSON.parse(savedUser);
+      return user.id?.toString() || null;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 export async function apiRequest(
   url: string,
   method: string = 'GET',
@@ -14,10 +27,19 @@ export async function apiRequest(
 ): Promise<any> {
   try {
     console.log(`API Request to ${url} (${method}):`, data);
-    
+
+    const userId = getUserIdFromStorage();
+    const headers: Record<string, string> = {};
+    if (data) {
+      headers["Content-Type"] = "application/json";
+    }
+    if (userId) {
+      headers["X-User-Id"] = userId;
+    }
+
     const res = await fetch(url, {
       method: method,
-      headers: data ? { "Content-Type": "application/json" } : {},
+      headers,
       body: data ? JSON.stringify(data) : undefined,
       credentials: "include",
     });
@@ -74,8 +96,15 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
+    const userId = getUserIdFromStorage();
+    const headers: Record<string, string> = {};
+    if (userId) {
+      headers["X-User-Id"] = userId;
+    }
+
     const res = await fetch(queryKey[0] as string, {
       credentials: "include",
+      headers,
     });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
