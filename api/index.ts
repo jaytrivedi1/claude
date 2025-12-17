@@ -104,10 +104,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Don't send password to client
       const { password: _, ...userWithoutPassword } = user;
 
-      return res.status(200).json({
+      return res.status(200).json(transformKeys({
         ...userWithoutPassword,
         companies: userCompanies
-      });
+      }));
     }
 
     // Get user
@@ -120,7 +120,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(401).json({ message: 'User not found' });
       }
       const { password: _, ...userWithoutPassword } = users[0];
-      return res.status(200).json(userWithoutPassword);
+      return res.status(200).json(transformKeys(userWithoutPassword));
     }
 
     // Get companies
@@ -133,7 +133,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         JOIN companies c ON uc.company_id = c.id
         WHERE uc.user_id = ${userId}
       `;
-      return res.status(200).json(companies);
+      return res.status(200).json(transformKeys(companies));
     }
 
     // Get default company
@@ -152,7 +152,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (companies.length === 0) {
         return res.status(404).json({ message: 'No company found' });
       }
-      return res.status(200).json(companies[0]);
+      return res.status(200).json(transformKeys(companies[0]));
     }
 
     // Dashboard metrics
