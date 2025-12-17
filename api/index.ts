@@ -127,7 +127,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         SELECT c.* FROM user_companies uc
         JOIN companies c ON uc.company_id = c.id
         WHERE uc.user_id = ${userId}
-        ORDER BY uc.is_primary DESC, c.id ASC
+        ORDER BY c.id ASC
         LIMIT 1
       `;
       if (companies.length === 0) {
