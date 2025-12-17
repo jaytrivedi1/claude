@@ -138,26 +138,68 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Dashboard metrics
     if ((path === '/api/dashboard/metrics' || path.endsWith('/dashboard/metrics')) && req.method === 'GET') {
-      // Return basic metrics
-      const accountsResult = await sql`SELECT COUNT(*) as count FROM accounts`;
-      const transactionsResult = await sql`SELECT COUNT(*) as count FROM transactions`;
-      const contactsResult = await sql`SELECT COUNT(*) as count FROM contacts`;
-
-      // Get totals
+      // Get income (invoices)
       const incomeResult = await sql`
         SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'invoice'
       `;
+      // Get expenses
       const expenseResult = await sql`
         SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE type = 'expense'
       `;
 
+      const income = Number(incomeResult[0]?.total) || 0;
+      const expenses = Number(expenseResult[0]?.total) || 0;
+      const netProfit = income - expenses;
+
+      // Get unpaid invoices
+      const unpaidInvoices = await sql`
+        SELECT COUNT(*) as count, COALESCE(SUM(balance), 0) as amount
+        FROM transactions WHERE type = 'invoice' AND status IN ('open', 'partial')
+      `;
+
+      // Get paid invoices
+      const paidInvoices = await sql`
+        SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as amount
+        FROM transactions WHERE type = 'invoice' AND status = 'paid'
+      `;
+
+      // Get bank accounts
+      const bankAccounts = await sql`
+        SELECT name, balance FROM accounts WHERE type = 'bank' AND is_active = true
+      `;
+
+      const totalBankBalance = bankAccounts.reduce((sum: number, acc: any) => sum + (Number(acc.balance) || 0), 0);
+
       return res.status(200).json({
-        totalIncome: incomeResult[0]?.total || 0,
-        totalExpenses: expenseResult[0]?.total || 0,
-        accountsCount: accountsResult[0]?.count || 0,
-        transactionsCount: transactionsResult[0]?.count || 0,
-        contactsCount: contactsResult[0]?.count || 0,
-        recentTransactions: []
+        profitLoss: {
+          netProfit,
+          percentageChange: 0,
+          income,
+          expenses
+        },
+        expensesByCategory: [],
+        invoices: {
+          unpaid: { count: Number(unpaidInvoices[0]?.count) || 0, amount: Number(unpaidInvoices[0]?.amount) || 0 },
+          paid: { count: Number(paidInvoices[0]?.count) || 0, amount: Number(paidInvoices[0]?.amount) || 0 },
+          overdue: { count: 0, amount: 0 },
+          deposited: { count: 0, amount: 0 }
+        },
+        bankAccounts: {
+          total: totalBankBalance,
+          accounts: bankAccounts.map((acc: any) => ({
+            name: acc.name,
+            balance: Number(acc.balance) || 0,
+            updated: new Date().toISOString()
+          }))
+        },
+        sales: [],
+        accountsReceivable: {
+          total: Number(unpaidInvoices[0]?.amount) || 0,
+          current: Number(unpaidInvoices[0]?.amount) || 0,
+          days30: 0,
+          days60: 0,
+          days90Plus: 0
+        }
       });
     }
 
