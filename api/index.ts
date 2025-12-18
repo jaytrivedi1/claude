@@ -538,7 +538,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const liabilities = await sql`
         SELECT a.id, a.name, a.code, a.type, a.balance as total
         FROM accounts a
-        WHERE a.type IN ('accounts_payable', 'credit_card', 'other_current_liability', 'long_term_liability')
+        WHERE a.type IN ('accounts_payable', 'credit_card', 'other_current_liabilities', 'long_term_liabilities')
         AND a.is_active = true
         AND a.balance != 0
         ORDER BY a.code
@@ -1597,7 +1597,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Get or create required accounts with CORRECT types for reports
       const arAccount = await getOrCreateAccount('1100', 'Accounts Receivable', 'accounts_receivable', 'Money owed by customers');
       const revenueAccount = await getOrCreateAccount('4000', 'Service Revenue', 'income', 'Revenue from services');
-      const taxPayableAccount = await getOrCreateAccount('2100', 'Sales Tax Payable', 'other_current_liability', 'Tax collected on sales');
+      const taxPayableAccount = await getOrCreateAccount('2100', 'Sales Tax Payable', 'other_current_liabilities', 'Tax collected on sales');
 
       console.log('[API] Using accounts:', {
         ar: { id: arAccount.id, type: arAccount.type },
@@ -1707,7 +1707,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Get required accounts
       const apAccount = await getOrCreateAccount('2000', 'Accounts Payable', 'accounts_payable', 'Money owed to vendors');
       const expenseAccount = await getOrCreateAccount('5000', 'Cost of Goods Sold', 'cost_of_goods_sold', 'Direct costs');
-      const taxPayableAccount = await getOrCreateAccount('2100', 'Sales Tax Payable', 'other_current_liability', 'Tax collected on sales');
+      const taxPayableAccount = await getOrCreateAccount('2100', 'Sales Tax Payable', 'other_current_liabilities', 'Tax collected on sales');
 
       // Create ledger entries for double-entry accounting
       // Debit expense for subtotal
@@ -2006,7 +2006,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         : await getOrCreateAccount('1000', 'Cash', 'bank', 'Cash on hand');
 
       // Get tax account
-      const taxPayableAccount = await getOrCreateAccount('2100', 'Sales Tax Payable', 'other_current_liability', 'Tax collected on sales');
+      const taxPayableAccount = await getOrCreateAccount('2100', 'Sales Tax Payable', 'other_current_liabilities', 'Tax collected on sales');
 
       // Create ledger entries for each line item (debit expense accounts)
       for (const item of lineItems) {
@@ -2306,7 +2306,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ? (await sql`SELECT id FROM accounts WHERE id = ${data.depositAccountId} LIMIT 1`)[0]
         : await getOrCreateAccount('1000', 'Cash', 'bank', 'Cash on hand');
       const revenueAccount = await getOrCreateAccount('4000', 'Service Revenue', 'income', 'Revenue from services');
-      const taxPayableAccount = await getOrCreateAccount('2100', 'Sales Tax Payable', 'other_current_liability', 'Tax collected');
+      const taxPayableAccount = await getOrCreateAccount('2100', 'Sales Tax Payable', 'other_current_liabilities', 'Tax collected');
 
       // Create ledger entries
       // Debit bank (increase cash)
