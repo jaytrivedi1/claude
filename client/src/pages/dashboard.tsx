@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { format, formatDistanceToNow } from "date-fns";
-import { TrendingUp, TrendingDown } from "lucide-react";
+import { TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight, Building2, Wallet, FileText, DollarSign } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Progress } from "@/components/ui/progress";
 import { formatCurrencyCompact } from "@/lib/currencyUtils";
+import { cn } from "@/lib/utils";
 import {
   PieChart,
   Pie,
@@ -16,7 +16,8 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Legend,
+  AreaChart,
+  Area,
 } from "recharts";
 
 interface DashboardMetrics {
@@ -55,6 +56,79 @@ interface Company {
 
 const COLORS = ['hsl(var(--chart-1))', 'hsl(var(--chart-2))', 'hsl(var(--chart-3))', 'hsl(var(--chart-4))', 'hsl(var(--chart-5))'];
 
+// Animation delay helper for staggered animations
+const getAnimationDelay = (index: number) => ({
+  animationDelay: `${index * 100}ms`,
+  animationFillMode: 'backwards' as const,
+});
+
+// Metric card component for consistent styling
+function MetricCard({
+  title,
+  value,
+  change,
+  changeType = 'neutral',
+  subtitle,
+  icon: Icon,
+  index = 0,
+  children,
+  className,
+  testId,
+}: {
+  title: string;
+  value?: string | number;
+  change?: number;
+  changeType?: 'positive' | 'negative' | 'neutral';
+  subtitle?: string;
+  icon?: React.ComponentType<{ className?: string }>;
+  index?: number;
+  children?: React.ReactNode;
+  className?: string;
+  testId?: string;
+}) {
+  return (
+    <Card
+      className={cn("animate-fade-in-up", className)}
+      style={getAnimationDelay(index)}
+      data-testid={testId}
+    >
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
+          {Icon && (
+            <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center">
+              <Icon className="h-4 w-4 text-primary" />
+            </div>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent>
+        {value !== undefined && (
+          <div className="flex items-baseline gap-2">
+            <span className="text-2xl font-bold text-foreground">{value}</span>
+            {change !== undefined && (
+              <span className={cn(
+                "flex items-center text-sm font-medium",
+                changeType === 'positive' && "text-emerald-600",
+                changeType === 'negative' && "text-red-500",
+                changeType === 'neutral' && "text-muted-foreground"
+              )}>
+                {changeType === 'positive' && <ArrowUpRight className="h-4 w-4" />}
+                {changeType === 'negative' && <ArrowDownRight className="h-4 w-4" />}
+                {Math.abs(change).toFixed(1)}%
+              </span>
+            )}
+          </div>
+        )}
+        {subtitle && (
+          <p className="text-sm text-muted-foreground mt-1">{subtitle}</p>
+        )}
+        {children}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function Dashboard() {
   // Fetch company data
   const { data: company, isLoading: companyLoading } = useQuery<Company>({
@@ -78,155 +152,213 @@ export default function Dashboard() {
 
   return (
     <div className="py-6 min-h-screen">
-      {/* Company Header */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8 mb-6">
-        {companyLoading ? (
-          <div className="flex items-center gap-4">
-            <Skeleton className="h-16 w-16 rounded-lg" />
-            <Skeleton className="h-8 w-48" />
-          </div>
-        ) : company ? (
-          <div className="flex items-center gap-4">
-            {company.logoUrl && (
-              <img
-                src={company.logoUrl}
-                alt={`${company.name} logo`}
-                className="h-16 w-16 object-contain rounded-lg border border-border bg-card p-2"
-                data-testid="company-logo"
-              />
-            )}
-            <div>
-              <h2 className="text-2xl font-bold text-foreground" data-testid="company-name">
+      {/* Page Header */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8 mb-8">
+        <div className="flex items-center justify-between animate-fade-in">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">
+              Dashboard
+            </h1>
+            {company && (
+              <p className="text-muted-foreground mt-1" data-testid="company-name">
                 {company.name}
-              </h2>
-            </div>
+              </p>
+            )}
           </div>
-        ) : null}
+          {company?.logoUrl && (
+            <img
+              src={company.logoUrl}
+              alt={`${company.name} logo`}
+              className="h-12 w-12 object-contain rounded-lg border border-border bg-card p-1.5"
+              data-testid="company-logo"
+            />
+          )}
+        </div>
       </div>
 
-      {/* Dashboard Title */}
+      {/* Key Metrics Row */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8 mb-6">
-        <h1 className="text-3xl font-bold bg-gradient-to-r from-primary via-accent to-primary bg-clip-text text-transparent">
-          Dashboard
-        </h1>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Net Profit */}
+          {isLoading ? (
+            <Card className="animate-fade-in-up" style={getAnimationDelay(0)}>
+              <CardContent className="pt-6">
+                <Skeleton className="h-4 w-24 mb-3" />
+                <Skeleton className="h-8 w-32 mb-2" />
+                <Skeleton className="h-4 w-20" />
+              </CardContent>
+            </Card>
+          ) : metrics && (
+            <MetricCard
+              title="Net Profit"
+              value={formatCurrencyCompact(metrics.profitLoss.netProfit, 'CAD', 'CAD')}
+              change={metrics.profitLoss.percentageChange}
+              changeType={metrics.profitLoss.percentageChange >= 0 ? 'positive' : 'negative'}
+              subtitle="Last 30 days"
+              icon={TrendingUp}
+              index={0}
+              testId="card-profit-loss"
+            />
+          )}
+
+          {/* Total Income */}
+          {isLoading ? (
+            <Card className="animate-fade-in-up" style={getAnimationDelay(1)}>
+              <CardContent className="pt-6">
+                <Skeleton className="h-4 w-24 mb-3" />
+                <Skeleton className="h-8 w-32 mb-2" />
+                <Skeleton className="h-4 w-20" />
+              </CardContent>
+            </Card>
+          ) : metrics && (
+            <MetricCard
+              title="Income"
+              value={formatCurrencyCompact(metrics.profitLoss.income, 'CAD', 'CAD')}
+              subtitle="Last 30 days"
+              icon={DollarSign}
+              index={1}
+              testId="card-income"
+            />
+          )}
+
+          {/* Total Expenses */}
+          {isLoading ? (
+            <Card className="animate-fade-in-up" style={getAnimationDelay(2)}>
+              <CardContent className="pt-6">
+                <Skeleton className="h-4 w-24 mb-3" />
+                <Skeleton className="h-8 w-32 mb-2" />
+                <Skeleton className="h-4 w-20" />
+              </CardContent>
+            </Card>
+          ) : metrics && (
+            <MetricCard
+              title="Expenses"
+              value={formatCurrencyCompact(metrics.profitLoss.expenses, 'CAD', 'CAD')}
+              subtitle="Last 30 days"
+              icon={Wallet}
+              index={2}
+              testId="card-expenses-summary"
+            />
+          )}
+
+          {/* Cash Balance */}
+          {isLoading ? (
+            <Card className="animate-fade-in-up" style={getAnimationDelay(3)}>
+              <CardContent className="pt-6">
+                <Skeleton className="h-4 w-24 mb-3" />
+                <Skeleton className="h-8 w-32 mb-2" />
+                <Skeleton className="h-4 w-20" />
+              </CardContent>
+            </Card>
+          ) : metrics && (
+            <MetricCard
+              title="Cash Balance"
+              value={formatCurrencyCompact(metrics.bankAccounts.total, 'CAD', 'CAD')}
+              subtitle="All accounts"
+              icon={Building2}
+              index={3}
+              testId="card-cash-balance"
+            />
+          )}
+        </div>
       </div>
 
-      {/* Dashboard Grid */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {/* Profit & Loss Card */}
-          <Card className="glass border-border/50" data-testid="card-profit-loss">
-            <CardHeader>
+      {/* Charts Row */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8 mb-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Sales Chart - Takes 2 columns */}
+          <Card className="lg:col-span-2 animate-fade-in-up" style={getAnimationDelay(4)} data-testid="card-sales">
+            <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-lg font-semibold">PROFIT & LOSS</CardTitle>
-                <span className="text-sm text-muted-foreground">Last month</span>
+                <CardTitle className="text-base font-semibold">Sales Trend</CardTitle>
+                <span className="text-sm text-muted-foreground">Year to date</span>
               </div>
-              <div className="text-sm text-muted-foreground">Net profit for October</div>
             </CardHeader>
             <CardContent>
               {isLoading ? (
-                <div className="space-y-4">
-                  <Skeleton className="h-10 w-32" />
-                  <Skeleton className="h-6 w-24" />
-                  <Skeleton className="h-4 w-full" />
-                  <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-64 w-full" />
+              ) : metrics && metrics.sales.length > 0 ? (
+                <div>
+                  <div className="text-2xl font-bold mb-4" data-testid="text-total-sales">
+                    {formatCurrencyCompact(metrics.sales.reduce((sum, month) => sum + month.amount, 0), 'CAD', 'CAD')}
+                  </div>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <AreaChart data={metrics.sales}>
+                      <defs>
+                        <linearGradient id="salesGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.2}/>
+                          <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                      <XAxis
+                        dataKey="month"
+                        stroke="hsl(var(--muted-foreground))"
+                        fontSize={12}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <YAxis
+                        stroke="hsl(var(--muted-foreground))"
+                        fontSize={12}
+                        tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
+                        tickLine={false}
+                        axisLine={false}
+                      />
+                      <Tooltip
+                        formatter={(value) => formatCurrencyCompact(Number(value), 'CAD', 'CAD')}
+                        contentStyle={{
+                          backgroundColor: 'hsl(var(--card))',
+                          border: '1px solid hsl(var(--border))',
+                          borderRadius: '0.5rem',
+                          boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
+                        }}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="amount"
+                        stroke="hsl(var(--primary))"
+                        strokeWidth={2}
+                        fill="url(#salesGradient)"
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
                 </div>
-              ) : metrics ? (
-                <div className="space-y-4">
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-3xl font-bold" data-testid="text-net-profit">
-                      {formatCurrencyCompact(metrics.profitLoss.netProfit, 'CAD', 'CAD')}
-                    </span>
-                    <div className="flex items-center gap-1 text-sm">
-                      {metrics.profitLoss.percentageChange >= 0 ? (
-                        <>
-                          <TrendingUp className="h-4 w-4 text-green-600" />
-                          <span className="text-green-600" data-testid="text-profit-change">
-                            {Math.abs(metrics.profitLoss.percentageChange).toFixed(0)}%
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <TrendingDown className="h-4 w-4 text-red-600" />
-                          <span className="text-red-600" data-testid="text-profit-change">
-                            {Math.abs(metrics.profitLoss.percentageChange).toFixed(0)}%
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="text-sm text-muted-foreground">
-                    {metrics.profitLoss.percentageChange >= 0 ? 'Up' : 'Down'} {Math.abs(metrics.profitLoss.percentageChange).toFixed(0)}% from prior 30 days
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground" data-testid="text-income-label">Income</span>
-                        <span className="font-medium" data-testid="text-income-amount">
-                          {formatCurrencyCompact(metrics.profitLoss.income, 'CAD', 'CAD')}
-                        </span>
-                      </div>
-                      <div className="h-2 bg-muted rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-green-500"
-                          style={{
-                            width: `${(metrics.profitLoss.income / (metrics.profitLoss.income + metrics.profitLoss.expenses)) * 100}%`,
-                          }}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-muted-foreground" data-testid="text-expenses-label">Expenses</span>
-                        <span className="font-medium" data-testid="text-expenses-amount">
-                          {formatCurrencyCompact(metrics.profitLoss.expenses, 'CAD', 'CAD')}
-                        </span>
-                      </div>
-                      <div className="h-2 bg-muted rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-cyan-500"
-                          style={{
-                            width: `${(metrics.profitLoss.expenses / (metrics.profitLoss.income + metrics.profitLoss.expenses)) * 100}%`,
-                          }}
-                        />
-                      </div>
-                    </div>
-                  </div>
+              ) : (
+                <div className="flex items-center justify-center h-64 text-muted-foreground">
+                  No sales data available
                 </div>
-              ) : null}
+              )}
             </CardContent>
           </Card>
 
-          {/* Expenses Card */}
-          <Card className="glass border-border/50" data-testid="card-expenses">
-            <CardHeader>
+          {/* Expenses by Category */}
+          <Card className="animate-fade-in-up" style={getAnimationDelay(5)} data-testid="card-expenses">
+            <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-lg font-semibold">EXPENSES</CardTitle>
+                <CardTitle className="text-base font-semibold">Expenses</CardTitle>
                 <span className="text-sm text-muted-foreground">Last 30 days</span>
               </div>
-              <div className="text-sm text-muted-foreground">Spending for last 30 days</div>
             </CardHeader>
             <CardContent>
               {isLoading ? (
-                <div className="flex items-center justify-center h-64">
-                  <Skeleton className="h-48 w-48 rounded-full" />
+                <div className="space-y-4">
+                  <Skeleton className="h-8 w-32" />
+                  <Skeleton className="h-40 w-40 rounded-full mx-auto" />
                 </div>
               ) : metrics && metrics.expensesByCategory.length > 0 ? (
-                <div className="space-y-4">
-                  <div className="text-3xl font-bold" data-testid="text-total-expenses">
+                <div>
+                  <div className="text-2xl font-bold mb-2" data-testid="text-total-expenses">
                     {formatCurrencyCompact(metrics.expensesByCategory.reduce((sum, cat) => sum + cat.amount, 0), 'CAD', 'CAD')}
                   </div>
-                  <ResponsiveContainer width="100%" height={200}>
+                  <ResponsiveContainer width="100%" height={160}>
                     <PieChart>
                       <Pie
                         data={metrics.expensesByCategory}
                         cx="50%"
                         cy="50%"
-                        innerRadius={60}
-                        outerRadius={80}
+                        innerRadius={45}
+                        outerRadius={65}
                         fill="#8884d8"
                         paddingAngle={2}
                         dataKey="amount"
@@ -238,15 +370,15 @@ export default function Dashboard() {
                       <Tooltip formatter={(value) => formatCurrencyCompact(Number(value), 'CAD', 'CAD')} />
                     </PieChart>
                   </ResponsiveContainer>
-                  <div className="space-y-2">
-                    {metrics.expensesByCategory.slice(0, 4).map((category, index) => (
+                  <div className="space-y-2 mt-2">
+                    {metrics.expensesByCategory.slice(0, 3).map((category, index) => (
                       <div key={index} className="flex items-center justify-between text-sm">
                         <div className="flex items-center gap-2">
                           <div
-                            className="h-3 w-3 rounded-full"
+                            className="h-2.5 w-2.5 rounded-full"
                             style={{ backgroundColor: COLORS[index % COLORS.length] }}
                           />
-                          <span className="text-muted-foreground" data-testid={`text-expense-category-${index}`}>
+                          <span className="text-muted-foreground truncate max-w-[120px]" data-testid={`text-expense-category-${index}`}>
                             {category.category}
                           </span>
                         </div>
@@ -255,11 +387,6 @@ export default function Dashboard() {
                         </span>
                       </div>
                     ))}
-                    {metrics.expensesByCategory.length > 4 && (
-                      <div className="text-sm text-muted-foreground">
-                        +{metrics.expensesByCategory.length - 4} more
-                      </div>
-                    )}
                   </div>
                 </div>
               ) : (
@@ -269,72 +396,54 @@ export default function Dashboard() {
               )}
             </CardContent>
           </Card>
+        </div>
+      </div>
 
+      {/* Bottom Row */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {/* Invoices Card */}
-          <Card className="glass border-border/50" data-testid="card-invoices">
-            <CardHeader>
-              <CardTitle className="text-lg font-semibold">INVOICES</CardTitle>
+          <Card className="animate-fade-in-up" style={getAnimationDelay(6)} data-testid="card-invoices">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base font-semibold">Invoices</CardTitle>
+                <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center">
+                  <FileText className="h-4 w-4 text-primary" />
+                </div>
+              </div>
             </CardHeader>
             <CardContent>
               {isLoading ? (
-                <div className="space-y-4">
-                  <Skeleton className="h-16 w-full" />
-                  <Skeleton className="h-16 w-full" />
-                  <Skeleton className="h-16 w-full" />
+                <div className="space-y-3">
+                  <Skeleton className="h-12 w-full" />
+                  <Skeleton className="h-12 w-full" />
                 </div>
               ) : metrics ? (
                 <div className="space-y-4">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium" data-testid="text-unpaid-label">
-                        ${metrics.invoices.unpaid.amount.toLocaleString()} Unpaid
-                      </span>
-                      <span className="text-sm text-muted-foreground">
-                        Last 365 days
-                      </span>
+                  {/* Unpaid Section */}
+                  <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/30">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-medium text-amber-700 dark:text-amber-400">Unpaid</span>
+                      <span className="text-sm text-muted-foreground">{metrics.invoices.unpaid.count} invoices</span>
                     </div>
-                    <div className="flex items-center gap-4">
-                      <div className="flex-1 space-y-1">
-                        <div className="h-8 bg-orange-500 flex items-center justify-center text-white text-sm font-medium rounded">
-                          Overdue
-                        </div>
-                        <div className="text-xs text-center text-muted-foreground">
-                          {metrics.invoices.overdue.count}
-                        </div>
-                      </div>
-                      <div className="flex-1 space-y-1">
-                        <div className="h-8 bg-gray-300 dark:bg-gray-600 flex items-center justify-center text-gray-700 dark:text-gray-200 text-sm font-medium rounded">
-                          Not due yet
-                        </div>
-                        <div className="text-xs text-center text-muted-foreground">
-                          {metrics.invoices.unpaid.count - metrics.invoices.overdue.count}
-                        </div>
-                      </div>
+                    <div className="text-xl font-bold text-foreground" data-testid="text-unpaid-label">
+                      ${metrics.invoices.unpaid.amount.toLocaleString()}
                     </div>
+                    {metrics.invoices.overdue.count > 0 && (
+                      <div className="text-xs text-red-600 dark:text-red-400 mt-1">
+                        {metrics.invoices.overdue.count} overdue
+                      </div>
+                    )}
                   </div>
 
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium" data-testid="text-paid-label">
-                        ${metrics.invoices.paid.amount.toLocaleString()} Paid
-                      </span>
-                      <span className="text-sm text-muted-foreground">
-                        Last 30 days
-                      </span>
+                  {/* Paid Section */}
+                  <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/30">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400">Paid (30 days)</span>
+                      <span className="text-sm text-muted-foreground">{metrics.invoices.paid.count} invoices</span>
                     </div>
-                    <div className="h-8 bg-green-500 flex items-center justify-center text-white text-sm font-medium rounded">
-                      {metrics.invoices.paid.count} paid
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium" data-testid="text-deposited-label">
-                        Deposited
-                      </span>
-                    </div>
-                    <div className="h-8 bg-green-600 flex items-center justify-center text-white text-sm font-medium rounded">
-                      {metrics.invoices.deposited.count} deposited
+                    <div className="text-xl font-bold text-foreground" data-testid="text-paid-label">
+                      ${metrics.invoices.paid.amount.toLocaleString()}
                     </div>
                   </div>
                 </div>
@@ -343,185 +452,111 @@ export default function Dashboard() {
           </Card>
 
           {/* Bank Accounts Card */}
-          <Card className="glass border-border/50" data-testid="card-bank-accounts">
-            <CardHeader>
+          <Card className="animate-fade-in-up" style={getAnimationDelay(7)} data-testid="card-bank-accounts">
+            <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-lg font-semibold">BANK ACCOUNTS</CardTitle>
-                <span className="text-sm text-muted-foreground">As of today</span>
+                <CardTitle className="text-base font-semibold">Bank Accounts</CardTitle>
+                <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center">
+                  <Building2 className="h-4 w-4 text-primary" />
+                </div>
               </div>
-              <div className="text-sm text-muted-foreground">Today's cash balance</div>
             </CardHeader>
             <CardContent>
               {isLoading ? (
-                <div className="space-y-4">
-                  <Skeleton className="h-10 w-32" />
-                  <Skeleton className="h-16 w-full" />
-                  <Skeleton className="h-16 w-full" />
+                <div className="space-y-3">
+                  <Skeleton className="h-14 w-full" />
+                  <Skeleton className="h-14 w-full" />
                 </div>
               ) : metrics ? (
-                <div className="space-y-4">
-                  <div className="text-3xl font-bold" data-testid="text-total-balance">
+                <div className="space-y-3">
+                  <div className="text-2xl font-bold mb-3" data-testid="text-total-balance">
                     {formatCurrencyCompact(metrics.bankAccounts.total, 'CAD', 'CAD')}
                   </div>
-
-                  <div className="space-y-3">
-                    {metrics.bankAccounts.accounts.map((account, index) => (
-                      <div
-                        key={index}
-                        className="flex items-center gap-3 p-3 rounded-lg border border-border hover:border-primary/30 transition-colors"
-                        data-testid={`bank-account-${index}`}
-                      >
-                        <div className="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center">
-                          <div className="h-6 w-6 rounded-full bg-primary/20" />
+                  {metrics.bankAccounts.accounts.slice(0, 2).map((account, index) => (
+                    <div
+                      key={index}
+                      className="flex items-center gap-3 p-2.5 rounded-lg bg-muted/50 hover:bg-muted transition-colors"
+                      data-testid={`bank-account-${index}`}
+                    >
+                      <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center">
+                        <Building2 className="h-4 w-4 text-primary" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-sm truncate" data-testid={`text-bank-name-${index}`}>
+                          {account.name}
                         </div>
-                        <div className="flex-1">
-                          <div className="font-medium" data-testid={`text-bank-name-${index}`}>
-                            {account.name}
-                          </div>
-                          <div className="text-sm text-muted-foreground">
-                            Bank Balance
-                          </div>
-                          <div className="text-xs text-muted-foreground" data-testid={`text-bank-updated-${index}`}>
-                            Updated {account.updated}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="font-semibold" data-testid={`text-bank-balance-${index}`}>
-                            {formatCurrencyCompact(account.balance, 'CAD', 'CAD')}
-                          </div>
+                        <div className="text-xs text-muted-foreground">
+                          Updated {account.updated}
                         </div>
                       </div>
-                    ))}
-                  </div>
+                      <div className="text-right">
+                        <div className="font-semibold text-sm" data-testid={`text-bank-balance-${index}`}>
+                          {formatCurrencyCompact(account.balance, 'CAD', 'CAD')}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {metrics.bankAccounts.accounts.length > 2 && (
+                    <div className="text-sm text-muted-foreground text-center pt-1">
+                      +{metrics.bankAccounts.accounts.length - 2} more accounts
+                    </div>
+                  )}
                 </div>
               ) : null}
             </CardContent>
           </Card>
 
-          {/* Sales Card */}
-          <Card className="glass border-border/50 md:col-span-2" data-testid="card-sales">
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-lg font-semibold">SALES</CardTitle>
-                <span className="text-sm text-muted-foreground">This year to date</span>
-              </div>
-              <div className="text-sm text-muted-foreground">Total Amount</div>
-            </CardHeader>
-            <CardContent>
-              {isLoading ? (
-                <div className="space-y-4">
-                  <Skeleton className="h-10 w-32" />
-                  <Skeleton className="h-64 w-full" />
-                </div>
-              ) : metrics && metrics.sales.length > 0 ? (
-                <div className="space-y-4">
-                  <div className="text-3xl font-bold" data-testid="text-total-sales">
-                    {formatCurrencyCompact(metrics.sales.reduce((sum, month) => sum + month.amount, 0), 'CAD', 'CAD')}
-                  </div>
-                  <ResponsiveContainer width="100%" height={250}>
-                    <LineChart data={metrics.sales}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                      <XAxis
-                        dataKey="month"
-                        stroke="hsl(var(--muted-foreground))"
-                        fontSize={12}
-                      />
-                      <YAxis
-                        stroke="hsl(var(--muted-foreground))"
-                        fontSize={12}
-                        tickFormatter={(value) => `$${(value / 1000).toFixed(0)}k`}
-                      />
-                      <Tooltip
-                        formatter={(value) => formatCurrencyCompact(Number(value), 'CAD', 'CAD')}
-                        contentStyle={{
-                          backgroundColor: 'hsl(var(--card))',
-                          border: '1px solid hsl(var(--border))',
-                          borderRadius: '0.5rem',
-                        }}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="amount"
-                        stroke="hsl(var(--primary))"
-                        strokeWidth={2}
-                        dot={{ fill: 'hsl(var(--primary))', r: 4 }}
-                        activeDot={{ r: 6 }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              ) : (
-                <div className="flex items-center justify-center h-64 text-muted-foreground">
-                  No sales data available
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
           {/* Accounts Receivable Card */}
-          <Card className="glass border-border/50" data-testid="card-accounts-receivable">
-            <CardHeader>
+          <Card className="animate-fade-in-up" style={getAnimationDelay(8)} data-testid="card-accounts-receivable">
+            <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-lg font-semibold">ACCOUNTS RECEIVABLE</CardTitle>
-                <span className="text-sm text-muted-foreground">As of today</span>
+                <CardTitle className="text-base font-semibold">Accounts Receivable</CardTitle>
+                <span className="text-sm text-muted-foreground">Aging</span>
               </div>
-              <div className="text-sm text-muted-foreground">Total</div>
             </CardHeader>
             <CardContent>
               {isLoading ? (
-                <div className="space-y-4">
-                  <Skeleton className="h-10 w-32" />
-                  <Skeleton className="h-48 w-48 rounded-full mx-auto" />
+                <div className="space-y-3">
+                  <Skeleton className="h-8 w-32" />
+                  <Skeleton className="h-32 w-full" />
                 </div>
               ) : metrics ? (
-                <div className="space-y-4">
-                  <div className="text-3xl font-bold" data-testid="text-ar-total">
+                <div>
+                  <div className="text-2xl font-bold mb-4" data-testid="text-ar-total">
                     {formatCurrencyCompact(metrics.accountsReceivable.total, 'CAD', 'CAD')}
                   </div>
 
                   {arData.length > 0 ? (
-                    <>
-                      <ResponsiveContainer width="100%" height={200}>
-                        <PieChart>
-                          <Pie
-                            data={arData}
-                            cx="50%"
-                            cy="50%"
-                            innerRadius={60}
-                            outerRadius={80}
-                            fill="#8884d8"
-                            paddingAngle={2}
-                            dataKey="value"
-                          >
-                            {arData.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                            ))}
-                          </Pie>
-                          <Tooltip formatter={(value) => formatCurrencyCompact(Number(value), 'CAD', 'CAD')} />
-                        </PieChart>
-                      </ResponsiveContainer>
-
-                      <div className="space-y-2">
-                        {arData.map((bucket, index) => (
-                          <div key={index} className="flex items-center justify-between text-sm">
-                            <div className="flex items-center gap-2">
-                              <div
-                                className="h-3 w-3 rounded-full"
-                                style={{ backgroundColor: COLORS[index % COLORS.length] }}
-                              />
+                    <div className="space-y-2">
+                      {arData.map((bucket, index) => {
+                        const percentage = metrics.accountsReceivable.total > 0
+                          ? (bucket.value / metrics.accountsReceivable.total) * 100
+                          : 0;
+                        return (
+                          <div key={index} className="space-y-1">
+                            <div className="flex items-center justify-between text-sm">
                               <span className="text-muted-foreground" data-testid={`text-ar-bucket-${index}`}>
                                 {bucket.name}
                               </span>
+                              <span className="font-medium" data-testid={`text-ar-amount-${index}`}>
+                                {formatCurrencyCompact(bucket.value, 'CAD', 'CAD')}
+                              </span>
                             </div>
-                            <span className="font-medium" data-testid={`text-ar-amount-${index}`}>
-                              {formatCurrencyCompact(bucket.value, 'CAD', 'CAD')}
-                            </span>
+                            <div className="h-2 bg-muted rounded-full overflow-hidden">
+                              <div
+                                className="h-full rounded-full transition-all"
+                                style={{
+                                  width: `${percentage}%`,
+                                  backgroundColor: COLORS[index % COLORS.length]
+                                }}
+                              />
+                            </div>
                           </div>
-                        ))}
-                      </div>
-                    </>
+                        );
+                      })}
+                    </div>
                   ) : (
-                    <div className="flex items-center justify-center h-48 text-muted-foreground">
+                    <div className="flex items-center justify-center h-32 text-muted-foreground">
                       No receivables
                     </div>
                   )}
