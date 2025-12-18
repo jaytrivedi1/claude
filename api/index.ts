@@ -10,14 +10,24 @@ function toCamelCase(str: string): string {
   return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
 }
 
-// Transform object keys from snake_case to camelCase
+// Transform object keys from snake_case to camelCase and handle dates
 function transformKeys(obj: any): any {
   if (Array.isArray(obj)) {
     return obj.map(transformKeys);
   }
+  // Convert Date objects to ISO strings
+  if (obj instanceof Date) {
+    return obj.toISOString();
+  }
   if (obj !== null && typeof obj === 'object') {
     return Object.keys(obj).reduce((acc, key) => {
-      acc[toCamelCase(key)] = transformKeys(obj[key]);
+      const value = obj[key];
+      // Handle Date objects
+      if (value instanceof Date) {
+        acc[toCamelCase(key)] = value.toISOString();
+      } else {
+        acc[toCamelCase(key)] = transformKeys(value);
+      }
       return acc;
     }, {} as any);
   }
