@@ -1136,9 +1136,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const invoiceDate = data.date;
 
       // Get required accounts (try multiple codes, create if missing)
-      let arAccount = await sql`SELECT id FROM accounts WHERE code IN ('1100', '1200') AND type IN ('accounts_receivable', 'asset') LIMIT 1`;
-      let revenueAccount = await sql`SELECT id FROM accounts WHERE code = '4000' AND type = 'income' LIMIT 1`;
-      let taxPayableAccount = await sql`SELECT id FROM accounts WHERE code IN ('2100', '2200') AND type IN ('other_current_liability', 'liability') LIMIT 1`;
+      let arAccount = await sql`SELECT id FROM accounts WHERE code IN ('1100', '1200') LIMIT 1`;
+      let revenueAccount = await sql`SELECT id FROM accounts WHERE code = '4000' LIMIT 1`;
+      let taxPayableAccount = await sql`SELECT id FROM accounts WHERE code IN ('2100', '2200') LIMIT 1`;
 
       // Create Accounts Receivable if missing
       if (arAccount.length === 0) {
