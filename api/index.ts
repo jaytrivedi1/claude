@@ -308,6 +308,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(transformKeys(products));
     }
 
+    // Delete transaction
+    const deleteTransactionMatch = path.match(/\/api\/transactions\/(\d+)$/);
+    if (deleteTransactionMatch && req.method === 'DELETE') {
+      const transactionId = parseInt(deleteTransactionMatch[1]);
+
+      // First delete related line_items
+      await sql`DELETE FROM line_items WHERE transaction_id = ${transactionId}`;
+
+      // Delete related ledger_entries
+      await sql`DELETE FROM ledger_entries WHERE transaction_id = ${transactionId}`;
+
+      // Delete related payment_applications (where this is the payment or invoice)
+      await sql`DELETE FROM payment_applications WHERE payment_id = ${transactionId} OR invoice_id = ${transactionId}`;
+
+      // Finally delete the transaction
+      await sql`DELETE FROM transactions WHERE id = ${transactionId}`;
+
+      return res.status(200).json({ success: true, message: 'Transaction deleted' });
+    }
+
     return res.status(404).json({ message: 'Not found', path, url: req.url });
   } catch (error: any) {
     console.error('API Error:', error);
