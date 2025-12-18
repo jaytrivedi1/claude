@@ -863,6 +863,429 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // ============================================
+    // BANK FEED MATCHING
+    // ============================================
+
+    // Get match suggestions for bank transaction
+    const suggestionsMatch = path.match(/\/api\/bank-feeds\/(\d+)\/suggestions$/);
+    if (suggestionsMatch && req.method === 'GET') {
+      const bankTxId = parseInt(suggestionsMatch[1]);
+
+      // Get the imported transaction
+      const bankTx = await sql`SELECT * FROM imported_transactions WHERE id = ${bankTxId} LIMIT 1`;
+      if (bankTx.length === 0) {
+        return res.status(404).json({ error: 'Imported transaction not found' });
+      }
+
+      const tx = bankTx[0];
+      const txAmount = Math.abs(Number(tx.amount));
+      const isDeposit = Number(tx.amount) > 0;
+      const suggestions: any[] = [];
+
+      // Date range for matching (30 days)
+      const txDate = new Date(tx.date);
+      const dateFrom = new Date(txDate);
+      dateFrom.setDate(dateFrom.getDate() - 30);
+      const dateTo = new Date(txDate);
+      dateTo.setDate(dateTo.getDate() + 30);
+
+      if (isDeposit) {
+        // Find matching invoices
+        const invoices = await sql`
+          SELECT t.id, t.type, t.reference, t.description, t.amount, t.balance, t.date, t.contact_id, c.name as contact_name
+          FROM transactions t
+          LEFT JOIN contacts c ON t.contact_id = c.id
+          WHERE t.type = 'invoice'
+          AND t.status IN ('open', 'overdue', 'partial')
+          AND t.date >= ${dateFrom.toISOString().split('T')[0]}
+          AND t.date <= ${dateTo.toISOString().split('T')[0]}
+        `;
+
+        for (const inv of invoices) {
+          const invBalance = Number(inv.balance) || Number(inv.amount);
+          const amountDiff = Math.abs(txAmount - Math.abs(invBalance));
+          const amountDiffPercent = amountDiff / Math.abs(invBalance);
+
+          let confidence = 0;
+          let matchType = 'fuzzy';
+          const matchReasons: string[] = [];
+
+          // Amount matching
+          if (amountDiff <= 0.01) {
+            confidence += 50;
+            matchType = 'exact';
+            matchReasons.push('Exact amount match');
+          } else if (amountDiffPercent <= 0.02) {
+            confidence += 40;
+            matchType = 'tolerance';
+            matchReasons.push('Amount within 2% tolerance');
+          } else if (amountDiffPercent <= 0.05) {
+            confidence += 25;
+            matchReasons.push('Amount close match');
+          }
+
+          // Date matching
+          const daysDiff = Math.abs((txDate.getTime() - new Date(inv.date).getTime()) / (1000 * 60 * 60 * 24));
+          if (daysDiff <= 3) {
+            confidence += 20;
+            matchReasons.push('Same week');
+          } else if (daysDiff <= 7) {
+            confidence += 15;
+          } else if (daysDiff <= 14) {
+            confidence += 10;
+          }
+
+          // Name matching
+          if (inv.contact_name && tx.name) {
+            const nameMatch = tx.name.toLowerCase().includes(inv.contact_name.toLowerCase()) ||
+                             inv.contact_name.toLowerCase().includes(tx.name.toLowerCase());
+            if (nameMatch) {
+              confidence += 15;
+              matchReasons.push('Customer name match');
+            }
+          }
+
+          // Reference matching
+          if (inv.reference && tx.name) {
+            if (tx.name.toLowerCase().includes(inv.reference.toLowerCase())) {
+              confidence += 20;
+              matchReasons.push('Reference number in description');
+            }
+          }
+
+          if (confidence >= 25) {
+            suggestions.push({
+              transactionId: inv.id,
+              transactionType: 'invoice',
+              reference: inv.reference,
+              description: inv.description,
+              amount: Number(inv.amount),
+              date: inv.date,
+              contactId: inv.contact_id,
+              contactName: inv.contact_name,
+              balance: invBalance,
+              confidence,
+              matchType,
+              matchReason: matchReasons.join(', ')
+            });
+          }
+        }
+      } else {
+        // Find matching bills
+        const bills = await sql`
+          SELECT t.id, t.type, t.reference, t.description, t.amount, t.balance, t.date, t.contact_id, c.name as contact_name
+          FROM transactions t
+          LEFT JOIN contacts c ON t.contact_id = c.id
+          WHERE t.type = 'bill'
+          AND t.status IN ('open', 'overdue', 'partial')
+          AND t.date >= ${dateFrom.toISOString().split('T')[0]}
+          AND t.date <= ${dateTo.toISOString().split('T')[0]}
+        `;
+
+        for (const bill of bills) {
+          const billBalance = Number(bill.balance) || Number(bill.amount);
+          const amountDiff = Math.abs(txAmount - Math.abs(billBalance));
+          const amountDiffPercent = amountDiff / Math.abs(billBalance);
+
+          let confidence = 0;
+          let matchType = 'fuzzy';
+          const matchReasons: string[] = [];
+
+          if (amountDiff <= 0.01) {
+            confidence += 50;
+            matchType = 'exact';
+            matchReasons.push('Exact amount match');
+          } else if (amountDiffPercent <= 0.02) {
+            confidence += 40;
+            matchType = 'tolerance';
+            matchReasons.push('Amount within 2% tolerance');
+          } else if (amountDiffPercent <= 0.05) {
+            confidence += 25;
+            matchReasons.push('Amount close match');
+          }
+
+          const daysDiff = Math.abs((txDate.getTime() - new Date(bill.date).getTime()) / (1000 * 60 * 60 * 24));
+          if (daysDiff <= 3) {
+            confidence += 20;
+            matchReasons.push('Same week');
+          } else if (daysDiff <= 7) {
+            confidence += 15;
+          }
+
+          if (bill.contact_name && tx.name) {
+            const nameMatch = tx.name.toLowerCase().includes(bill.contact_name.toLowerCase()) ||
+                             bill.contact_name.toLowerCase().includes(tx.name.toLowerCase());
+            if (nameMatch) {
+              confidence += 15;
+              matchReasons.push('Vendor name match');
+            }
+          }
+
+          if (confidence >= 25) {
+            suggestions.push({
+              transactionId: bill.id,
+              transactionType: 'bill',
+              reference: bill.reference,
+              description: bill.description,
+              amount: Number(bill.amount),
+              date: bill.date,
+              contactId: bill.contact_id,
+              contactName: bill.contact_name,
+              balance: billBalance,
+              confidence,
+              matchType,
+              matchReason: matchReasons.join(', ')
+            });
+          }
+        }
+      }
+
+      // Sort by confidence descending
+      suggestions.sort((a, b) => b.confidence - a.confidence);
+
+      return res.status(200).json({ suggestions, count: suggestions.length });
+    }
+
+    // Match bank deposit to invoice (create payment)
+    const matchInvoiceMatch = path.match(/\/api\/bank-feeds\/(\d+)\/match-invoice$/);
+    if (matchInvoiceMatch && req.method === 'POST') {
+      const bankTxId = parseInt(matchInvoiceMatch[1]);
+      const { invoiceId } = req.body;
+
+      if (!invoiceId) {
+        return res.status(400).json({ error: 'Invoice ID is required' });
+      }
+
+      // Get imported transaction
+      const bankTx = await sql`SELECT * FROM imported_transactions WHERE id = ${bankTxId} LIMIT 1`;
+      if (bankTx.length === 0) {
+        return res.status(404).json({ error: 'Imported transaction not found' });
+      }
+
+      const tx = bankTx[0];
+      if (tx.status === 'matched') {
+        return res.status(400).json({ error: 'Transaction is already matched' });
+      }
+
+      // Get invoice
+      const invoice = await sql`SELECT * FROM transactions WHERE id = ${invoiceId} AND type = 'invoice' LIMIT 1`;
+      if (invoice.length === 0) {
+        return res.status(404).json({ error: 'Invoice not found' });
+      }
+
+      const inv = invoice[0];
+      const amount = Math.abs(Number(tx.amount));
+      const txDate = tx.date;
+
+      // Create payment transaction
+      const paymentRef = `PAY-${new Date(txDate).toISOString().slice(0,10).replace(/-/g, '')}-${Date.now().toString().slice(-4)}`;
+      const paymentResult = await sql`
+        INSERT INTO transactions (type, reference, date, contact_id, amount, balance, currency, status, memo)
+        VALUES ('payment', ${paymentRef}, ${txDate}, ${inv.contact_id}, ${amount}, 0, 'CAD', 'completed', ${`Payment for Invoice ${inv.reference || inv.id}`})
+        RETURNING id
+      `;
+      const paymentId = paymentResult[0].id;
+
+      // Get accounts
+      const bankAccountId = tx.bank_account_id || tx.account_id;
+      let arAccountResult = await sql`SELECT id FROM accounts WHERE code IN ('1100', '1200') LIMIT 1`;
+      if (arAccountResult.length === 0) {
+        arAccountResult = await sql`
+          INSERT INTO accounts (code, name, type, description, balance, currency, is_active)
+          VALUES ('1100', 'Accounts Receivable', 'accounts_receivable', 'Money owed by customers', 0, 'CAD', true)
+          RETURNING id
+        `;
+      }
+      const arAccountId = arAccountResult[0].id;
+
+      // Create ledger entries
+      if (bankAccountId) {
+        await sql`
+          INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+          VALUES (${bankAccountId}, ${paymentId}, ${`Payment received - ${inv.reference || inv.id}`}, ${amount}, 0, ${txDate})
+        `;
+        await sql`UPDATE accounts SET balance = balance + ${amount} WHERE id = ${bankAccountId}`;
+      }
+
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${arAccountId}, ${paymentId}, ${`Payment applied - ${inv.reference || inv.id}`}, 0, ${amount}, ${txDate})
+      `;
+      await sql`UPDATE accounts SET balance = balance - ${amount} WHERE id = ${arAccountId}`;
+
+      // Create payment application
+      await sql`INSERT INTO payment_applications (payment_id, invoice_id, amount_applied) VALUES (${paymentId}, ${invoiceId}, ${amount})`;
+
+      // Update invoice balance and status
+      const currentBalance = Number(inv.balance) || Number(inv.amount);
+      const newBalance = Math.max(0, currentBalance - amount);
+      const newStatus = newBalance <= 0.01 ? 'paid' : 'partial';
+      await sql`UPDATE transactions SET balance = ${newBalance}, status = ${newStatus} WHERE id = ${invoiceId}`;
+
+      // Mark imported transaction as matched
+      await sql`
+        UPDATE imported_transactions
+        SET matched_transaction_id = ${paymentId}, matched_transaction_type = 'payment', is_manual_match = false, status = 'matched'
+        WHERE id = ${bankTxId}
+      `;
+
+      console.log('[API] Matched bank deposit to invoice:', { bankTxId, invoiceId, paymentId });
+      return res.status(200).json({ success: true, paymentId, message: 'Payment created and applied to invoice' });
+    }
+
+    // Match bank payment to bill (create bill payment)
+    const matchBillMatch = path.match(/\/api\/bank-feeds\/(\d+)\/match-bill$/);
+    if (matchBillMatch && req.method === 'POST') {
+      const bankTxId = parseInt(matchBillMatch[1]);
+      const { billId } = req.body;
+
+      if (!billId) {
+        return res.status(400).json({ error: 'Bill ID is required' });
+      }
+
+      // Get imported transaction
+      const bankTx = await sql`SELECT * FROM imported_transactions WHERE id = ${bankTxId} LIMIT 1`;
+      if (bankTx.length === 0) {
+        return res.status(404).json({ error: 'Imported transaction not found' });
+      }
+
+      const tx = bankTx[0];
+      if (tx.status === 'matched') {
+        return res.status(400).json({ error: 'Transaction is already matched' });
+      }
+
+      // Get bill
+      const bill = await sql`SELECT * FROM transactions WHERE id = ${billId} AND type = 'bill' LIMIT 1`;
+      if (bill.length === 0) {
+        return res.status(404).json({ error: 'Bill not found' });
+      }
+
+      const b = bill[0];
+      const amount = Math.abs(Number(tx.amount));
+      const txDate = tx.date;
+
+      // Create bill payment transaction
+      const paymentRef = `BILLPAY-${new Date(txDate).toISOString().slice(0,10).replace(/-/g, '')}-${Date.now().toString().slice(-4)}`;
+      const paymentResult = await sql`
+        INSERT INTO transactions (type, reference, date, contact_id, amount, balance, currency, status, memo)
+        VALUES ('bill_payment', ${paymentRef}, ${txDate}, ${b.contact_id}, ${amount}, 0, 'CAD', 'completed', ${`Payment for Bill ${b.reference || b.id}`})
+        RETURNING id
+      `;
+      const paymentId = paymentResult[0].id;
+
+      // Get accounts
+      const bankAccountId = tx.bank_account_id || tx.account_id;
+      let apAccountResult = await sql`SELECT id FROM accounts WHERE code = '2000' LIMIT 1`;
+      if (apAccountResult.length === 0) {
+        apAccountResult = await sql`
+          INSERT INTO accounts (code, name, type, description, balance, currency, is_active)
+          VALUES ('2000', 'Accounts Payable', 'accounts_payable', 'Money owed to vendors', 0, 'CAD', true)
+          RETURNING id
+        `;
+      }
+      const apAccountId = apAccountResult[0].id;
+
+      // Create ledger entries - debit AP, credit bank
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${apAccountId}, ${paymentId}, ${`Bill payment - ${b.reference || b.id}`}, ${amount}, 0, ${txDate})
+      `;
+      await sql`UPDATE accounts SET balance = balance - ${amount} WHERE id = ${apAccountId}`;
+
+      if (bankAccountId) {
+        await sql`
+          INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+          VALUES (${bankAccountId}, ${paymentId}, ${`Bill payment - ${b.reference || b.id}`}, 0, ${amount}, ${txDate})
+        `;
+        await sql`UPDATE accounts SET balance = balance - ${amount} WHERE id = ${bankAccountId}`;
+      }
+
+      // Create payment application
+      await sql`INSERT INTO payment_applications (payment_id, invoice_id, amount_applied) VALUES (${paymentId}, ${billId}, ${amount})`;
+
+      // Update bill balance and status
+      const currentBalance = Number(b.balance) || Number(b.amount);
+      const newBalance = Math.max(0, currentBalance - amount);
+      const newStatus = newBalance <= 0.01 ? 'paid' : 'partial';
+      await sql`UPDATE transactions SET balance = ${newBalance}, status = ${newStatus} WHERE id = ${billId}`;
+
+      // Mark imported transaction as matched
+      await sql`
+        UPDATE imported_transactions
+        SET matched_transaction_id = ${paymentId}, matched_transaction_type = 'payment', is_manual_match = false, status = 'matched'
+        WHERE id = ${bankTxId}
+      `;
+
+      console.log('[API] Matched bank payment to bill:', { bankTxId, billId, paymentId });
+      return res.status(200).json({ success: true, paymentId, message: 'Payment created and applied to bill' });
+    }
+
+    // Link bank transaction to existing manual entry
+    const linkManualMatch = path.match(/\/api\/bank-feeds\/(\d+)\/link-manual$/);
+    if (linkManualMatch && req.method === 'POST') {
+      const bankTxId = parseInt(linkManualMatch[1]);
+      const { transactionId, transactionType } = req.body;
+
+      if (!transactionId) {
+        return res.status(400).json({ error: 'Transaction ID is required' });
+      }
+
+      // Get imported transaction
+      const bankTx = await sql`SELECT * FROM imported_transactions WHERE id = ${bankTxId} LIMIT 1`;
+      if (bankTx.length === 0) {
+        return res.status(404).json({ error: 'Imported transaction not found' });
+      }
+
+      if (bankTx[0].status === 'matched') {
+        return res.status(400).json({ error: 'Transaction is already matched' });
+      }
+
+      // Mark as matched (manual link, no new transaction created)
+      await sql`
+        UPDATE imported_transactions
+        SET matched_transaction_id = ${transactionId}, matched_transaction_type = ${transactionType || 'manual'}, is_manual_match = true, status = 'matched'
+        WHERE id = ${bankTxId}
+      `;
+
+      console.log('[API] Linked bank transaction manually:', { bankTxId, transactionId });
+      return res.status(200).json({ success: true, message: 'Transaction linked successfully' });
+    }
+
+    // Unmatch bank transaction
+    const unmatchMatch = path.match(/\/api\/bank-feeds\/(\d+)\/unmatch$/);
+    if (unmatchMatch && req.method === 'POST') {
+      const bankTxId = parseInt(unmatchMatch[1]);
+
+      // Get the imported transaction to check if it created a payment
+      const bankTx = await sql`SELECT * FROM imported_transactions WHERE id = ${bankTxId} LIMIT 1`;
+      if (bankTx.length === 0) {
+        return res.status(404).json({ error: 'Imported transaction not found' });
+      }
+
+      const tx = bankTx[0];
+
+      // If it was an auto-match (not manual), we need to reverse the created payment
+      if (!tx.is_manual_match && tx.matched_transaction_id) {
+        // Delete payment applications
+        await sql`DELETE FROM payment_applications WHERE payment_id = ${tx.matched_transaction_id}`;
+        // Delete ledger entries
+        await sql`DELETE FROM ledger_entries WHERE transaction_id = ${tx.matched_transaction_id}`;
+        // Delete the payment transaction
+        await sql`DELETE FROM transactions WHERE id = ${tx.matched_transaction_id}`;
+      }
+
+      // Reset the imported transaction
+      await sql`
+        UPDATE imported_transactions
+        SET matched_transaction_id = NULL, matched_transaction_type = NULL, is_manual_match = false, status = 'unmatched'
+        WHERE id = ${bankTxId}
+      `;
+
+      console.log('[API] Unmatched bank transaction:', bankTxId);
+      return res.status(200).json({ success: true, message: 'Transaction unmatched' });
+    }
+
+    // ============================================
     // RADAR ADDRESS AUTOCOMPLETE
     // ============================================
 
