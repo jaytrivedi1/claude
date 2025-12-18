@@ -2,8 +2,68 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { neon } from '@neondatabase/serverless';
 import { scrypt, timingSafeEqual } from 'crypto';
 import { promisify } from 'util';
+import { Configuration, PlaidApi, PlaidEnvironments, Products, CountryCode } from 'plaid';
+import { Resend } from 'resend';
+import Stripe from 'stripe';
 
 const scryptAsync = promisify(scrypt);
+
+// ============================================
+// External API Clients (lazy initialization)
+// ============================================
+
+// Plaid Client
+let plaidClient: PlaidApi | null = null;
+function getPlaidClient(): PlaidApi | null {
+  if (plaidClient) return plaidClient;
+
+  const clientId = process.env.PLAID_CLIENT_ID;
+  const secret = process.env.PLAID_SECRET;
+  const env = process.env.PLAID_ENV || 'sandbox';
+
+  if (!clientId || !secret) {
+    return null;
+  }
+
+  const configuration = new Configuration({
+    basePath: PlaidEnvironments[env as keyof typeof PlaidEnvironments],
+    baseOptions: {
+      headers: {
+        'PLAID-CLIENT-ID': clientId,
+        'PLAID-SECRET': secret,
+      },
+    },
+  });
+
+  plaidClient = new PlaidApi(configuration);
+  return plaidClient;
+}
+
+// Resend Client
+let resendClient: Resend | null = null;
+function getResendClient(): Resend | null {
+  if (resendClient) return resendClient;
+
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) return null;
+
+  resendClient = new Resend(apiKey);
+  return resendClient;
+}
+
+// Stripe Client
+let stripeClient: Stripe | null = null;
+function getStripeClient(): Stripe | null {
+  if (stripeClient) return stripeClient;
+
+  const secretKey = process.env.STRIPE_SECRET_KEY;
+  if (!secretKey) return null;
+
+  stripeClient = new Stripe(secretKey, {
+    apiVersion: '2024-12-18.acacia',
+  });
+  return stripeClient;
+}
 
 // Convert snake_case to camelCase
 function toCamelCase(str: string): string {
@@ -589,21 +649,451 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json([]);
     }
 
-    // Plaid endpoints (return empty - Plaid not configured)
-    if (path.startsWith('/api/plaid')) {
-      if (path.includes('/link-token')) {
-        return res.status(200).json({ linkToken: null, error: 'Plaid not configured' });
+    // ============================================
+    // PLAID INTEGRATION ENDPOINTS
+    // ============================================
+
+    // Create Plaid link token
+    if ((path === '/api/plaid/link-token' || path.endsWith('/plaid/link-token')) && req.method === 'POST') {
+      const plaid = getPlaidClient();
+      if (!plaid) {
+        return res.status(200).json({ linkToken: null, error: 'Plaid not configured. Add PLAID_CLIENT_ID and PLAID_SECRET to environment.' });
       }
-      if (path.includes('/accounts')) {
+
+      try {
+        const response = await plaid.linkTokenCreate({
+          user: { client_user_id: `user_${userId || 'default'}` },
+          client_name: 'Vedo Bookkeeping',
+          products: [Products.Transactions],
+          country_codes: [CountryCode.Us, CountryCode.Ca],
+          language: 'en',
+        });
+        return res.status(200).json({ link_token: response.data.link_token });
+      } catch (error: any) {
+        console.error('Plaid link token error:', error);
+        return res.status(500).json({ error: error.message });
+      }
+    }
+
+    // Exchange Plaid public token for access token
+    if ((path === '/api/plaid/exchange-token' || path.endsWith('/plaid/exchange-token')) && req.method === 'POST') {
+      const plaid = getPlaidClient();
+      if (!plaid) {
+        return res.status(500).json({ error: 'Plaid not configured' });
+      }
+
+      try {
+        const { public_token, accountId } = req.body;
+        if (!public_token) {
+          return res.status(400).json({ error: 'public_token is required' });
+        }
+
+        // Exchange public token
+        const tokenResponse = await plaid.itemPublicTokenExchange({ public_token });
+        const accessToken = tokenResponse.data.access_token;
+        const itemId = tokenResponse.data.item_id;
+
+        // Get institution info
+        const itemResponse = await plaid.itemGet({ access_token: accessToken });
+        const institutionId = itemResponse.data.item.institution_id;
+
+        let institutionName = 'Unknown Bank';
+        if (institutionId) {
+          try {
+            const instResponse = await plaid.institutionsGetById({
+              institution_id: institutionId,
+              country_codes: [CountryCode.Us, CountryCode.Ca],
+            });
+            institutionName = instResponse.data.institution.name;
+          } catch {}
+        }
+
+        // Get accounts from Plaid
+        const accountsResponse = await plaid.accountsGet({ access_token: accessToken });
+
+        // Store bank connection
+        const connectionResult = await sql`
+          INSERT INTO bank_connections (plaid_item_id, plaid_access_token, institution_name, institution_id, status, last_sync)
+          VALUES (${itemId}, ${accessToken}, ${institutionName}, ${institutionId}, 'active', NOW())
+          RETURNING id
+        `;
+        const connectionId = connectionResult[0].id;
+
+        // Store bank accounts
+        const bankAccounts = [];
+        const linkedAccountId = accountId ? parseInt(accountId) : null;
+        let isFirstAccount = true;
+
+        for (const account of accountsResponse.data.accounts) {
+          const bankAccount = await sql`
+            INSERT INTO bank_accounts (connection_id, plaid_account_id, name, official_name, type, subtype, mask, current_balance, available_balance, linked_account_id, is_active)
+            VALUES (${connectionId}, ${account.account_id}, ${account.name}, ${account.official_name}, ${account.type}, ${account.subtype}, ${account.mask}, ${account.balances.current}, ${account.balances.available}, ${isFirstAccount ? linkedAccountId : null}, true)
+            RETURNING *
+          `;
+          bankAccounts.push(bankAccount[0]);
+          isFirstAccount = false;
+        }
+
+        return res.status(200).json({ connection: { id: connectionId, institutionName }, bankAccounts: transformKeys(bankAccounts) });
+      } catch (error: any) {
+        console.error('Plaid exchange token error:', error);
+        return res.status(500).json({ error: error.message });
+      }
+    }
+
+    // Get Plaid connections
+    if ((path === '/api/plaid/connections' || path.endsWith('/plaid/connections')) && req.method === 'GET') {
+      const connections = await sql`SELECT * FROM bank_connections WHERE status = 'active' ORDER BY id`;
+      return res.status(200).json(transformKeys(connections));
+    }
+
+    // Get Plaid bank accounts
+    if ((path === '/api/plaid/accounts' || path.endsWith('/plaid/accounts')) && req.method === 'GET') {
+      const accounts = await sql`SELECT * FROM bank_accounts WHERE is_active = true ORDER BY id`;
+      return res.status(200).json(transformKeys(accounts));
+    }
+
+    // Sync Plaid transactions
+    const syncTransactionsMatch = path.match(/\/api\/plaid\/sync-transactions\/(\d+)$/);
+    if (syncTransactionsMatch && req.method === 'POST') {
+      const plaid = getPlaidClient();
+      if (!plaid) {
+        return res.status(500).json({ error: 'Plaid not configured' });
+      }
+
+      try {
+        const accountId = parseInt(syncTransactionsMatch[1]);
+        const bankAccounts = await sql`SELECT * FROM bank_accounts WHERE id = ${accountId}`;
+        if (bankAccounts.length === 0) {
+          return res.status(404).json({ error: 'Bank account not found' });
+        }
+        const bankAccount = bankAccounts[0];
+
+        const connections = await sql`SELECT * FROM bank_connections WHERE id = ${bankAccount.connection_id}`;
+        if (connections.length === 0) {
+          return res.status(404).json({ error: 'Bank connection not found' });
+        }
+        const connection = connections[0];
+
+        // Get transactions from Plaid (last 30 days)
+        const startDate = new Date();
+        startDate.setDate(startDate.getDate() - 30);
+        const endDate = new Date();
+
+        const transactionsResponse = await plaid.transactionsGet({
+          access_token: connection.plaid_access_token,
+          start_date: startDate.toISOString().split('T')[0],
+          end_date: endDate.toISOString().split('T')[0],
+          options: { account_ids: [bankAccount.plaid_account_id] },
+        });
+
+        const transactions = transactionsResponse.data.transactions;
+        const importedTransactions = [];
+
+        for (const tx of transactions) {
+          // Check if already imported
+          const existing = await sql`SELECT id FROM imported_transactions WHERE plaid_transaction_id = ${tx.transaction_id}`;
+          if (existing.length > 0) continue;
+
+          const imported = await sql`
+            INSERT INTO imported_transactions (bank_account_id, plaid_transaction_id, date, posted_date, name, merchant_name, amount, currency, category, pending, payment_channel, status, source)
+            VALUES (${bankAccount.id}, ${tx.transaction_id}, ${tx.date}, ${tx.authorized_date}, ${tx.name}, ${tx.merchant_name}, ${-tx.amount}, ${tx.iso_currency_code || 'USD'}, ${JSON.stringify(tx.category)}, ${tx.pending}, ${tx.payment_channel}, 'unmatched', 'plaid')
+            RETURNING *
+          `;
+          importedTransactions.push(imported[0]);
+        }
+
+        // Update last sync time
+        await sql`UPDATE bank_accounts SET last_synced_at = NOW() WHERE id = ${bankAccount.id}`;
+        await sql`UPDATE bank_connections SET last_sync = NOW() WHERE id = ${connection.id}`;
+
+        return res.status(200).json({ synced: importedTransactions.length, total: transactions.length, transactions: transformKeys(importedTransactions) });
+      } catch (error: any) {
+        console.error('Plaid sync error:', error);
+        return res.status(500).json({ error: error.message });
+      }
+    }
+
+    // Get imported transactions
+    if ((path === '/api/plaid/imported-transactions' || path.endsWith('/plaid/imported-transactions')) && req.method === 'GET') {
+      const { status } = req.query as { status?: string };
+      let transactions;
+      if (status) {
+        transactions = await sql`SELECT * FROM imported_transactions WHERE status = ${status} ORDER BY date DESC`;
+      } else {
+        transactions = await sql`SELECT * FROM imported_transactions ORDER BY date DESC`;
+      }
+      return res.status(200).json(transformKeys(transactions));
+    }
+
+    // Delete Plaid connection
+    const deleteConnectionMatch = path.match(/\/api\/plaid\/connections\/(\d+)$/);
+    if (deleteConnectionMatch && req.method === 'DELETE') {
+      const connectionId = parseInt(deleteConnectionMatch[1]);
+      await sql`DELETE FROM bank_accounts WHERE connection_id = ${connectionId}`;
+      await sql`DELETE FROM bank_connections WHERE id = ${connectionId}`;
+      return res.status(200).json({ success: true });
+    }
+
+    // Delete imported transaction (soft delete)
+    const deleteImportedMatch = path.match(/\/api\/plaid\/imported-transactions\/(\d+)$/);
+    if (deleteImportedMatch && req.method === 'DELETE') {
+      const txId = parseInt(deleteImportedMatch[1]);
+      await sql`UPDATE imported_transactions SET status = 'deleted' WHERE id = ${txId}`;
+      return res.status(200).json({ success: true });
+    }
+
+    // Restore imported transaction
+    const restoreImportedMatch = path.match(/\/api\/plaid\/imported-transactions\/(\d+)\/restore$/);
+    if (restoreImportedMatch && req.method === 'POST') {
+      const txId = parseInt(restoreImportedMatch[1]);
+      await sql`UPDATE imported_transactions SET status = 'unmatched' WHERE id = ${txId}`;
+      return res.status(200).json({ success: true });
+    }
+
+    // ============================================
+    // RADAR ADDRESS AUTOCOMPLETE
+    // ============================================
+
+    if ((path === '/api/address/autocomplete' || path.endsWith('/address/autocomplete')) && req.method === 'GET') {
+      const query = req.query.query as string;
+
+      if (!query || query.length < 3) {
         return res.status(200).json([]);
       }
-      if (path.includes('/connections')) {
-        return res.status(200).json([]);
+
+      const radarApiKey = process.env.RADAR_API_KEY;
+      if (!radarApiKey) {
+        return res.status(500).json({ error: 'Radar API key not configured' });
       }
-      if (path.includes('/imported-transactions')) {
-        return res.status(200).json([]);
+
+      try {
+        const response = await fetch(
+          `https://api.radar.io/v1/search/autocomplete?query=${encodeURIComponent(query)}`,
+          { headers: { 'Authorization': radarApiKey } }
+        );
+        const data = await response.json();
+        return res.status(200).json(data.addresses || []);
+      } catch (error: any) {
+        console.error('Radar API error:', error);
+        return res.status(500).json({ error: error.message });
       }
-      return res.status(200).json([]);
+    }
+
+    // ============================================
+    // RESEND EMAIL ENDPOINTS
+    // ============================================
+
+    // Send invoice email
+    if ((path === '/api/email/send-invoice' || path.endsWith('/email/send-invoice')) && req.method === 'POST') {
+      const resend = getResendClient();
+      const fromEmail = process.env.RESEND_FROM_EMAIL;
+
+      if (!resend || !fromEmail) {
+        return res.status(500).json({ error: 'Email service not configured. Add RESEND_API_KEY and RESEND_FROM_EMAIL.' });
+      }
+
+      try {
+        const { to, subject, invoiceId, html } = req.body;
+
+        if (!to || !subject) {
+          return res.status(400).json({ error: 'to and subject are required' });
+        }
+
+        const result = await resend.emails.send({
+          from: fromEmail,
+          to: Array.isArray(to) ? to : [to],
+          subject,
+          html: html || `<p>Please find your invoice attached.</p>`,
+        });
+
+        return res.status(200).json({ success: true, id: result.data?.id });
+      } catch (error: any) {
+        console.error('Resend error:', error);
+        return res.status(500).json({ error: error.message });
+      }
+    }
+
+    // ============================================
+    // STRIPE PAYMENT ENDPOINTS
+    // ============================================
+
+    // Create Stripe checkout session
+    if ((path === '/api/stripe/checkout-session' || path.endsWith('/stripe/checkout-session')) && req.method === 'POST') {
+      const stripe = getStripeClient();
+      if (!stripe) {
+        return res.status(500).json({ error: 'Stripe not configured. Add STRIPE_SECRET_KEY.' });
+      }
+
+      try {
+        const { invoiceId, amount, currency, customerEmail, description, successUrl, cancelUrl } = req.body;
+
+        if (!amount || !successUrl || !cancelUrl) {
+          return res.status(400).json({ error: 'amount, successUrl, and cancelUrl are required' });
+        }
+
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ['card'],
+          mode: 'payment',
+          customer_email: customerEmail,
+          line_items: [{
+            price_data: {
+              currency: (currency || 'usd').toLowerCase(),
+              product_data: { name: description || 'Invoice Payment' },
+              unit_amount: Math.round(amount * 100), // Convert to cents
+            },
+            quantity: 1,
+          }],
+          metadata: invoiceId ? { invoiceId: invoiceId.toString() } : undefined,
+          success_url: successUrl,
+          cancel_url: cancelUrl,
+        });
+
+        return res.status(200).json({ sessionId: session.id, url: session.url });
+      } catch (error: any) {
+        console.error('Stripe error:', error);
+        return res.status(500).json({ error: error.message });
+      }
+    }
+
+    // Get Stripe checkout session status
+    const stripeSessionMatch = path.match(/\/api\/stripe\/session\/([^/]+)$/);
+    if (stripeSessionMatch && req.method === 'GET') {
+      const stripe = getStripeClient();
+      if (!stripe) {
+        return res.status(500).json({ error: 'Stripe not configured' });
+      }
+
+      try {
+        const sessionId = stripeSessionMatch[1];
+        const session = await stripe.checkout.sessions.retrieve(sessionId);
+        return res.status(200).json({
+          status: session.payment_status,
+          customerEmail: session.customer_email,
+          amountTotal: session.amount_total,
+          currency: session.currency,
+          metadata: session.metadata,
+        });
+      } catch (error: any) {
+        console.error('Stripe session error:', error);
+        return res.status(500).json({ error: error.message });
+      }
+    }
+
+    // Stripe webhook handler
+    if ((path === '/api/stripe/webhook' || path.endsWith('/stripe/webhook')) && req.method === 'POST') {
+      const stripe = getStripeClient();
+      const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+      if (!stripe || !webhookSecret) {
+        return res.status(500).json({ error: 'Stripe webhook not configured' });
+      }
+
+      try {
+        const signature = req.headers['stripe-signature'] as string;
+        const rawBody = JSON.stringify(req.body);
+
+        const event = stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
+
+        // Handle checkout.session.completed
+        if (event.type === 'checkout.session.completed') {
+          const session = event.data.object as Stripe.Checkout.Session;
+          const invoiceId = session.metadata?.invoiceId;
+
+          if (invoiceId) {
+            // Mark invoice as paid
+            await sql`UPDATE transactions SET status = 'paid', balance = 0 WHERE id = ${parseInt(invoiceId)}`;
+            console.log(`Invoice ${invoiceId} marked as paid via Stripe`);
+          }
+        }
+
+        return res.status(200).json({ received: true });
+      } catch (error: any) {
+        console.error('Stripe webhook error:', error);
+        return res.status(400).json({ error: error.message });
+      }
+    }
+
+    // ============================================
+    // EXCHANGE RATE API
+    // ============================================
+
+    // Fetch latest exchange rates
+    if ((path === '/api/exchange-rates/fetch' || path.endsWith('/exchange-rates/fetch')) && req.method === 'POST') {
+      const apiKey = process.env.EXCHANGERATE_API_KEY;
+      if (!apiKey) {
+        return res.status(500).json({ error: 'Exchange rate API key not configured' });
+      }
+
+      try {
+        const { baseCurrency } = req.body;
+        const base = baseCurrency || 'CAD';
+
+        const response = await fetch(`https://v6.exchangerate-api.com/v6/${apiKey}/latest/${base}`);
+        const data = await response.json();
+
+        if (data.result !== 'success') {
+          return res.status(500).json({ error: 'Failed to fetch exchange rates' });
+        }
+
+        // Store rates in database
+        const today = new Date().toISOString().split('T')[0];
+        let stored = 0;
+
+        for (const [currency, rate] of Object.entries(data.conversion_rates)) {
+          if (currency !== base) {
+            await sql`
+              INSERT INTO exchange_rates (from_currency, to_currency, rate, date)
+              VALUES (${base}, ${currency}, ${rate as number}, ${today})
+              ON CONFLICT (from_currency, to_currency, date) DO UPDATE SET rate = ${rate as number}
+            `;
+            stored++;
+          }
+        }
+
+        return res.status(200).json({ success: true, base, ratesStored: stored, date: today });
+      } catch (error: any) {
+        console.error('Exchange rate API error:', error);
+        return res.status(500).json({ error: error.message });
+      }
+    }
+
+    // Get exchange rate for specific currency pair
+    if ((path === '/api/exchange-rates/convert' || path.endsWith('/exchange-rates/convert')) && req.method === 'GET') {
+      const { from, to, amount } = req.query as { from?: string; to?: string; amount?: string };
+
+      if (!from || !to) {
+        return res.status(400).json({ error: 'from and to currencies are required' });
+      }
+
+      // Try to get rate from database first
+      const rates = await sql`
+        SELECT rate FROM exchange_rates
+        WHERE from_currency = ${from} AND to_currency = ${to}
+        ORDER BY date DESC LIMIT 1
+      `;
+
+      if (rates.length > 0) {
+        const rate = Number(rates[0].rate);
+        const convertedAmount = amount ? Number(amount) * rate : rate;
+        return res.status(200).json({ from, to, rate, amount: amount ? Number(amount) : 1, converted: convertedAmount });
+      }
+
+      // If not in database, fetch from API
+      const apiKey = process.env.EXCHANGERATE_API_KEY;
+      if (apiKey) {
+        try {
+          const response = await fetch(`https://v6.exchangerate-api.com/v6/${apiKey}/pair/${from}/${to}`);
+          const data = await response.json();
+          if (data.result === 'success') {
+            const rate = data.conversion_rate;
+            const convertedAmount = amount ? Number(amount) * rate : rate;
+            return res.status(200).json({ from, to, rate, amount: amount ? Number(amount) : 1, converted: convertedAmount });
+          }
+        } catch {}
+      }
+
+      return res.status(404).json({ error: 'Exchange rate not found' });
     }
 
     // Create invoice
