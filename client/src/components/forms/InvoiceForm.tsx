@@ -970,165 +970,104 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
         </div>
 
         <div className="p-6 overflow-y-auto flex-grow bg-muted/30">
-          {/* Main content area with improved 2-column layout */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-7xl mx-auto animate-fade-in">
-            {/* Left column - Main content */}
-            <div className="lg:col-span-8 space-y-6">
-              {/* Customer section - with better alignment */}
-              <div className="bg-card rounded-xl border border-border shadow-sm p-6">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <FormField
-                      control={form.control}
-                      name="contactId"
-                      render={({ field }) => (
-                        <FormItem>
-                          <div className="flex items-center gap-1 mb-2">
-                            <FormLabel className="text-sm font-medium">Customer</FormLabel>
-                            <HelpCircle className="h-4 w-4 text-gray-400" />
-                          </div>
-                          <FormControl>
-                            <SearchableSelect
-                              items={customerItems}
-                              value={field.value?.toString() || ""}
-                              onValueChange={(value) => {
-                                const contactId = parseInt(value);
-                                field.onChange(contactId);
-                                handleContactChange(contactId);
-                              }}
-                              placeholder="Select a customer"
-                              emptyText={contactsLoading ? "Loading contacts..." : "No customers found"}
-                              searchPlaceholder="Search customers..."
-                              className="bg-white border-gray-300 h-10"
-                              disabled={contactsLoading}
-                              onAddNew={() => setShowAddCustomerDialog(true)}
-                              addNewText="Add New Customer"
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  </div>
-                  
-                  <div className="space-y-3">
+          {/* Redesigned single-column layout for better space utilization */}
+          <div className="max-w-6xl mx-auto space-y-4 animate-fade-in">
+
+            {/* Combined Customer & Invoice Details Card */}
+            <div className="bg-card rounded-xl border border-border shadow-sm p-5">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                {/* Left: Customer Info */}
+                <div className="lg:col-span-5 space-y-4">
+                  <FormField
+                    control={form.control}
+                    name="contactId"
+                    render={({ field }) => (
+                      <FormItem>
+                        <div className="flex items-center gap-1 mb-1.5">
+                          <FormLabel className="text-sm font-medium">Customer</FormLabel>
+                          <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
+                        </div>
+                        <FormControl>
+                          <SearchableSelect
+                            items={customerItems}
+                            value={field.value?.toString() || ""}
+                            onValueChange={(value) => {
+                              const contactId = parseInt(value);
+                              field.onChange(contactId);
+                              handleContactChange(contactId);
+                            }}
+                            placeholder="Select a customer"
+                            emptyText={contactsLoading ? "Loading contacts..." : "No customers found"}
+                            searchPlaceholder="Search customers..."
+                            className="bg-background border-border h-9"
+                            disabled={contactsLoading}
+                            onAddNew={() => setShowAddCustomerDialog(true)}
+                            addNewText="Add New Customer"
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <div className="flex items-center gap-1 mb-2">
-                        <FormLabel className="text-sm font-medium">Customer email</FormLabel>
-                        <HelpCircle className="h-4 w-4 text-gray-400" />
-                      </div>
-                      <Input 
-                        className="bg-white border-gray-300 h-10" 
-                        placeholder="Separate emails with a comma"
+                      <FormLabel className="text-sm font-medium block mb-1.5">Email</FormLabel>
+                      <Input
+                        className="bg-background border-border h-9 text-sm"
+                        placeholder="customer@email.com"
                         value={selectedContact?.email || ''}
                         readOnly
                       />
                     </div>
-                    
-                    <div className="flex items-center space-x-2">
-                      <Checkbox 
-                        id="send-invoice" 
-                        checked={sendInvoiceEmail}
-                        onCheckedChange={(checked) => setSendInvoiceEmail(checked as boolean)}
-                      />
-                      <label
-                        htmlFor="send-invoice"
-                        className="text-sm leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-                      >
-                        Send later
-                      </label>
-                      <HelpCircle className="h-4 w-4 text-gray-400" />
-                    </div>
-                  </div>
-                </div>
-              </div>
-              
-              {/* Billing section - improved alignment */}
-              <div className="bg-card rounded-xl border border-border shadow-sm p-6">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <div>
-                    <FormLabel className="text-sm font-medium block mb-2">Billing address</FormLabel>
-                    <Textarea
-                      className="min-h-[120px] bg-background border-border resize-none"
-                      value={selectedContact?.address || ''}
-                      readOnly
-                    />
-                  </div>
-                  
-                  <div className="space-y-4">
-                    <div>
-                      <div className="flex items-center gap-1 mb-2">
-                        <FormLabel className="text-sm font-medium">Terms</FormLabel>
-                        <HelpCircle className="h-4 w-4 text-muted-foreground" />
+                    <div className="flex items-end pb-2">
+                      <div className="flex items-center space-x-2">
+                        <Checkbox
+                          id="send-invoice"
+                          checked={sendInvoiceEmail}
+                          onCheckedChange={(checked) => setSendInvoiceEmail(checked as boolean)}
+                        />
+                        <label htmlFor="send-invoice" className="text-sm text-muted-foreground">
+                          Send later
+                        </label>
                       </div>
-                      <FormItem>
-                        <FormControl>
-                          <Select 
-                            value={paymentTerms} 
-                            onValueChange={(value) => handlePaymentTermsChange(value as PaymentTerms)}
-                          >
-                            <SelectTrigger className="bg-background border-border h-10">
-                              <SelectValue placeholder="Select payment terms" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="0">Due upon receipt</SelectItem>
-                              <SelectItem value="7">Net 7</SelectItem>
-                              <SelectItem value="14">Net 14</SelectItem>
-                              <SelectItem value="30">Net 30</SelectItem>
-                              <SelectItem value="60">Net 60</SelectItem>
-                              <SelectItem value="custom">Custom</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </FormControl>
-                      </FormItem>
                     </div>
-                    
-                    {isMultiCurrencyEnabled && (
-                      <div className="space-y-4">
-                        <div>
-                          <div className="flex items-center gap-1 mb-2">
-                            <FormLabel className="text-sm font-medium">Currency</FormLabel>
-                            <HelpCircle className="h-4 w-4 text-muted-foreground" />
-                          </div>
+                  </div>
+
+                  {/* Compact Billing Address */}
+                  {selectedContact?.address && (
+                    <div>
+                      <FormLabel className="text-sm font-medium block mb-1.5">Billing Address</FormLabel>
+                      <div className="text-sm text-muted-foreground bg-muted/50 rounded-lg p-2.5 border border-border">
+                        {selectedContact.address}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Right: Invoice Details Grid */}
+                <div className="lg:col-span-7">
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                    {/* Invoice Number */}
+                    <div>
+                      <FormLabel className="text-sm font-medium block mb-1.5">Invoice No.</FormLabel>
+                      <FormField
+                        control={form.control}
+                        name="reference"
+                        render={({ field }) => (
                           <FormItem>
                             <FormControl>
-                              <Select 
-                                value={currency} 
-                                onValueChange={(value) => setCurrency(value)}
-                                disabled={isEditing || !!watchContactId}
-                              >
-                                <SelectTrigger className="bg-background border-border h-10">
-                                  <SelectValue placeholder="Select currency" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {CURRENCIES.map(curr => (
-                                    <SelectItem key={curr.code} value={curr.code}>
-                                      {curr.code} - {curr.name}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
+                              <Input className="bg-background border-border h-9 text-sm" {...field} />
                             </FormControl>
+                            <FormMessage />
                           </FormItem>
-                        </div>
-                        
-                        {currency !== homeCurrency && (
-                          <ExchangeRateInput
-                            fromCurrency={currency}
-                            toCurrency={homeCurrency}
-                            value={exchangeRate}
-                            onChange={handleExchangeRateChange}
-                            isLoading={exchangeRateLoading}
-                            date={invoiceDate}
-                          />
                         )}
-                      </div>
-                    )}
-                  </div>
-                  
-                  <div className="space-y-4">
+                      />
+                    </div>
+
+                    {/* Invoice Date */}
                     <div>
-                      <FormLabel className="text-sm font-medium block mb-2">Invoice date</FormLabel>
+                      <FormLabel className="text-sm font-medium block mb-1.5">Invoice Date</FormLabel>
                       <FormField
                         control={form.control}
                         name="date"
@@ -1138,7 +1077,7 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                               <PopoverTrigger asChild>
                                 <FormControl>
                                   <Input
-                                    className="bg-background border-border h-10 text-left"
+                                    className="bg-background border-border h-9 text-sm text-left cursor-pointer"
                                     value={field.value ? format(field.value, "dd/MM/yyyy") : ""}
                                     readOnly
                                   />
@@ -1158,13 +1097,14 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                         )}
                       />
                     </div>
-                    
+
+                    {/* Due Date */}
                     <div>
-                      <FormLabel className="text-sm font-medium block mb-2">Due date</FormLabel>
+                      <FormLabel className="text-sm font-medium block mb-1.5">Due Date</FormLabel>
                       <Popover>
                         <PopoverTrigger asChild>
                           <Input
-                            className="bg-background border-border h-10 text-left"
+                            className="bg-background border-border h-9 text-sm text-left cursor-pointer"
                             value={format(dueDate, "dd/MM/yyyy")}
                             readOnly
                           />
@@ -1179,11 +1119,80 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                         </PopoverContent>
                       </Popover>
                     </div>
+
+                    {/* Terms */}
+                    <div>
+                      <FormLabel className="text-sm font-medium block mb-1.5">Terms</FormLabel>
+                      <Select value={paymentTerms} onValueChange={(value) => handlePaymentTermsChange(value as PaymentTerms)}>
+                        <SelectTrigger className="bg-background border-border h-9 text-sm">
+                          <SelectValue placeholder="Select terms" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="0">Due upon receipt</SelectItem>
+                          <SelectItem value="7">Net 7</SelectItem>
+                          <SelectItem value="14">Net 14</SelectItem>
+                          <SelectItem value="30">Net 30</SelectItem>
+                          <SelectItem value="60">Net 60</SelectItem>
+                          <SelectItem value="custom">Custom</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Currency (if multi-currency enabled) */}
+                    {isMultiCurrencyEnabled && (
+                      <div className="col-span-2">
+                        <FormLabel className="text-sm font-medium block mb-1.5">Currency</FormLabel>
+                        <Select value={currency} onValueChange={(value) => setCurrency(value)} disabled={isEditing || !!watchContactId}>
+                          <SelectTrigger className="bg-background border-border h-9 text-sm">
+                            <SelectValue placeholder="Select currency" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {CURRENCIES.map(curr => (
+                              <SelectItem key={curr.code} value={curr.code}>
+                                {curr.code} - {curr.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+
+                    {/* Exchange Rate (if foreign currency) */}
+                    {isMultiCurrencyEnabled && currency !== homeCurrency && (
+                      <div className="col-span-2">
+                        <ExchangeRateInput
+                          fromCurrency={currency}
+                          toCurrency={homeCurrency}
+                          value={exchangeRate}
+                          onChange={handleExchangeRateChange}
+                          isLoading={exchangeRateLoading}
+                          date={invoiceDate}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Balance Due - Prominent Display */}
+                  <div className="mt-4 pt-4 border-t border-border">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-muted-foreground">Balance Due</span>
+                      {currency !== homeCurrency ? (
+                        <div className="text-right">
+                          <div className="text-2xl font-bold text-primary">
+                            {CURRENCIES.find(c => c.code === currency)?.symbol || currency}{formatCurrency(balanceDue)}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            ≈ {CURRENCIES.find(c => c.code === homeCurrency)?.symbol || homeCurrency}{formatCurrency(balanceDue * exchangeRate)}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-2xl font-bold text-primary">${formatCurrency(balanceDue)}</div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
-              
-              {/* Tags section removed as requested */}
+            </div>
 
               {/* Line Items - improved table */}
               <div className="bg-card rounded-xl border border-border shadow-sm p-6">
@@ -1541,159 +1550,97 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                 </div>
               </div>
               
-              {/* Invoice message */}
-              <div className="bg-card rounded-xl border border-border shadow-sm p-6">
-                <FormLabel className="text-sm font-medium block mb-2">Message on invoice</FormLabel>
+              {/* Bottom Section: Message & Attachments side by side */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Message on Invoice */}
+              <div className="bg-card rounded-xl border border-border shadow-sm p-4">
+                <FormLabel className="text-sm font-medium block mb-2">Message on Invoice</FormLabel>
                 <Textarea
-                  className="min-h-[100px] bg-background border-border resize-none"
+                  className="min-h-[80px] bg-background border-border resize-none text-sm"
                   placeholder="Add a personal note or message for this invoice"
                 />
               </div>
-            </div>
 
-            {/* Right column - Invoice details */}
-            <div className="lg:col-span-4 space-y-6">
-              {/* Balance Due Card */}
-              <div className="bg-card rounded-xl border border-border shadow-sm p-6">
-                <div className="text-center">
-                  <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2 font-medium">Balance Due</div>
-                  {currency !== homeCurrency ? (
-                    <div>
-                      <div className="text-3xl font-bold text-foreground">
-                        {CURRENCIES.find(c => c.code === currency)?.symbol || currency}{formatCurrency(balanceDue)}
-                      </div>
-                      <div className="text-sm text-muted-foreground mt-1">
-                        ≈ {CURRENCIES.find(c => c.code === homeCurrency)?.symbol || homeCurrency}{formatCurrency(balanceDue * exchangeRate)}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="text-3xl font-bold text-primary">${formatCurrency(balanceDue)}</div>
-                  )}
-                </div>
-              </div>
-              
-              {/* Invoice Number Card */}
-              <div className="bg-card rounded-xl border border-border shadow-sm p-6">
-                <FormLabel className="text-sm font-medium block mb-2">Invoice no.</FormLabel>
-                <FormField
-                  control={form.control}
-                  name="reference"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormControl>
-                        <Input
-                          className="bg-background border-border h-10"
-                          {...field}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-
-              {/* Attach Documents Card */}
-              <div className="bg-card rounded-xl border border-border shadow-sm p-6">
-                <FormLabel className="text-sm font-medium block mb-3">Attach documents</FormLabel>
-                <div className="border-2 border-dashed border-border rounded-xl p-6 text-center hover:border-primary/50 hover:bg-primary/5 transition-colors cursor-pointer">
-                  <div className="relative inline-block">
-                    <Button 
-                      type="button" 
-                      variant="outline" 
-                      size="sm" 
-                      className="mb-2"
+              {/* Attachments */}
+              <div className="bg-card rounded-xl border border-border shadow-sm p-4">
+                <FormLabel className="text-sm font-medium block mb-2">Attachments</FormLabel>
+                <div className="border-2 border-dashed border-border rounded-lg p-4 text-center hover:border-primary/50 hover:bg-primary/5 transition-colors cursor-pointer">
+                  <div className="flex items-center justify-center gap-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
                       onClick={() => document.getElementById('file-upload-invoice')?.click()}
                     >
                       Select files
                     </Button>
-                    <input
-                      type="file"
-                      id="file-upload-invoice"
-                      className="hidden"
-                      multiple
-                      onChange={(e) => {
-                        // Handle file selection here
-                        console.log("Files selected:", e.target.files);
-                      }}
-                    />
+                    <span className="text-xs text-muted-foreground">or drag and drop</span>
                   </div>
-                  <p className="text-xs text-gray-500 mt-2">Drag and drop files here</p>
-                  <p className="text-xs text-gray-400 mt-1">PDF, Word, Excel, image files</p>
+                  <input
+                    type="file"
+                    id="file-upload-invoice"
+                    className="hidden"
+                    multiple
+                    onChange={(e) => console.log("Files selected:", e.target.files)}
+                  />
+                  <p className="text-xs text-muted-foreground mt-2">PDF, Word, Excel, images</p>
                 </div>
               </div>
-              
-              {/* Available Credits Panel */}
-              {(unappliedCredits.length > 0 || appliedCredits.length > 0) && (
-                <div className="bg-card rounded-xl border border-border shadow-sm p-6">
-                  <div className="mb-4">
-                    <div className="text-sm font-medium mb-2">Available Credits</div>
-                    {unappliedCredits.length === 0 && appliedCredits.length > 0 ? (
-                      <div className="text-xs text-gray-500">No additional credits available</div>
-                    ) : (
-                      <div className="text-sm text-green-600 font-medium">
-                        ${formatCurrency(unappliedCredits.reduce((sum, c) => sum + Math.abs(c.balance || 0), 0))}
-                      </div>
-                    )}
-                  </div>
-                  
-                  {/* List of unapplied credits with add button - with scrolling */}
-                  <div className="max-h-48 overflow-y-auto">
-                    {unappliedCredits.filter(c => !appliedCredits.some(ac => ac.creditId === c.id)).map(credit => (
-                      <div key={credit.id} className="flex items-center justify-between py-2 border-b last:border-0">
-                        <div className="flex-grow">
-                          <div className="text-sm font-medium">Credit #{credit.id}</div>
-                          <div className="text-xs text-gray-500">
-                            {format(new Date(credit.date), 'MMM dd, yyyy')} - ${formatCurrency(Math.abs(credit.balance || 0))}
-                          </div>
-                        </div>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => addCredit(credit)}
-                          className="ml-2"
-                          data-testid={`button-add-credit-${credit.id}`}
-                        >
-                          <Plus className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                  
-                  {/* Applied credits with remove button - with scrolling */}
-                  {appliedCredits.length > 0 && (
-                    <div className="mt-4 pt-4 border-t">
-                      <div className="text-sm font-medium mb-2">Applied to this invoice</div>
-                      <div className="max-h-48 overflow-y-auto space-y-2">
-                        {appliedCredits.map(ac => (
-                          <div key={ac.creditId} className="flex items-center gap-2 py-2">
-                            <div className="flex-grow">
-                              <div className="text-sm">Credit #{ac.creditId}</div>
-                              <div className="text-xs text-gray-500">
-                                {format(new Date(ac.credit.date), 'MMM dd, yyyy')} - ${formatCurrency(Math.abs(ac.credit.balance || 0))} available
-                              </div>
-                            </div>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => removeCredit(ac.creditId)}
-                              data-testid={`button-remove-credit-${ac.creditId}`}
-                            >
-                              <X className="h-4 w-4 text-gray-500" />
-                            </Button>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="flex justify-between items-center mt-3 pt-3 border-t font-medium text-green-600">
-                        <span>Total Applied:</span>
-                        <span>${formatCurrency(appliedCredits.reduce((sum, ac) => sum + ac.amount, 0))}</span>
-                      </div>
+            </div>
+
+            {/* Available Credits (compact, shown only if credits exist) */}
+            {(unappliedCredits.length > 0 || appliedCredits.length > 0) && (
+              <div className="bg-card rounded-xl border border-border shadow-sm p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-sm font-medium">Available Credits</div>
+                  {unappliedCredits.length > 0 && (
+                    <div className="text-sm text-green-600 font-medium">
+                      ${formatCurrency(unappliedCredits.reduce((sum, c) => sum + Math.abs(c.balance || 0), 0))} available
                     </div>
                   )}
                 </div>
-              )}
-            </div>
+
+                <div className="flex flex-wrap gap-2">
+                  {unappliedCredits.filter(c => !appliedCredits.some(ac => ac.creditId === c.id)).map(credit => (
+                    <Button
+                      key={credit.id}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => addCredit(credit)}
+                      className="text-xs"
+                      data-testid={`button-add-credit-${credit.id}`}
+                    >
+                      Credit #{credit.id} (${formatCurrency(Math.abs(credit.balance || 0))})
+                    </Button>
+                  ))}
+                </div>
+
+                {appliedCredits.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-border">
+                    <div className="flex flex-wrap gap-2 items-center">
+                      <span className="text-xs text-muted-foreground">Applied:</span>
+                      {appliedCredits.map(ac => (
+                        <div key={ac.creditId} className="flex items-center gap-1 bg-green-50 text-green-700 px-2 py-1 rounded text-xs">
+                          Credit #{ac.creditId}: ${formatCurrency(ac.amount)}
+                          <button
+                            type="button"
+                            onClick={() => removeCredit(ac.creditId)}
+                            className="hover:text-red-600"
+                            data-testid={`button-remove-credit-${ac.creditId}`}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ))}
+                      <span className="text-xs font-medium text-green-600 ml-auto">
+                        Total: ${formatCurrency(appliedCredits.reduce((sum, ac) => sum + ac.amount, 0))}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
         
