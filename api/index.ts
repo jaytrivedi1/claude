@@ -1135,79 +1135,84 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const invoiceRef = data.reference || `INV-${transactionId}`;
       const invoiceDate = data.date;
 
-      // Get required accounts (try multiple codes, create if missing)
-      let arAccount = await sql`SELECT id FROM accounts WHERE code IN ('1100', '1200') LIMIT 1`;
-      let revenueAccount = await sql`SELECT id FROM accounts WHERE code = '4000' LIMIT 1`;
-      let taxPayableAccount = await sql`SELECT id FROM accounts WHERE code IN ('2100', '2200') LIMIT 1`;
+      // Helper function to get or create account with correct type
+      const getOrCreateAccount = async (code: string, name: string, type: string, description: string) => {
+        // First try to find existing account with this code
+        let account = await sql`SELECT id, type, name FROM accounts WHERE code = ${code} LIMIT 1`;
 
-      // Create Accounts Receivable if missing
-      if (arAccount.length === 0) {
-        const newAR = await sql`
-          INSERT INTO accounts (code, name, type, description, balance, currency, is_active)
-          VALUES ('1100', 'Accounts Receivable', 'accounts_receivable', 'Money owed by customers', 0, 'CAD', true)
-          RETURNING id
-        `;
-        arAccount = newAR;
-        console.log('[API] Created Accounts Receivable account');
-      }
-
-      // Create Service Revenue if missing
-      if (revenueAccount.length === 0) {
-        const newRevenue = await sql`
-          INSERT INTO accounts (code, name, type, description, balance, currency, is_active)
-          VALUES ('4000', 'Service Revenue', 'income', 'Revenue from services', 0, 'CAD', true)
-          RETURNING id
-        `;
-        revenueAccount = newRevenue;
-        console.log('[API] Created Service Revenue account');
-      }
-
-      // Create Sales Tax Payable if missing
-      if (taxPayableAccount.length === 0) {
-        const newTax = await sql`
-          INSERT INTO accounts (code, name, type, description, balance, currency, is_active)
-          VALUES ('2100', 'Sales Tax Payable', 'other_current_liability', 'Tax collected on sales', 0, 'CAD', true)
-          RETURNING id
-        `;
-        taxPayableAccount = newTax;
-        console.log('[API] Created Sales Tax Payable account');
-      }
-
-      if (arAccount.length > 0 && revenueAccount.length > 0) {
-        // Debit Accounts Receivable for total amount
-        await sql`
-          INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
-          VALUES (${arAccount[0].id}, ${transactionId}, ${`Invoice ${invoiceRef}`}, ${invoiceAmount}, 0, ${invoiceDate})
-        `;
-
-        // Credit Service Revenue for subtotal
-        await sql`
-          INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
-          VALUES (${revenueAccount[0].id}, ${transactionId}, ${`Invoice ${invoiceRef} - Revenue`}, 0, ${subTotal}, ${invoiceDate})
-        `;
-
-        // Credit Sales Tax Payable for tax amount (if any)
-        if (taxAmount > 0 && taxPayableAccount.length > 0) {
-          await sql`
-            INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
-            VALUES (${taxPayableAccount[0].id}, ${transactionId}, ${`Invoice ${invoiceRef} - Tax`}, 0, ${taxAmount}, ${invoiceDate})
-          `;
+        if (account.length > 0) {
+          // Account exists - check if type matches
+          if (account[0].type !== type) {
+            // Update the type to correct value
+            await sql`UPDATE accounts SET type = ${type} WHERE id = ${account[0].id}`;
+            console.log(`[API] Updated account ${code} type from ${account[0].type} to ${type}`);
+          }
+          return account[0];
         }
 
-        // Update account balances
-        // Accounts Receivable (Asset) - increase with debit
-        await sql`UPDATE accounts SET balance = balance + ${invoiceAmount} WHERE id = ${arAccount[0].id}`;
+        // Account doesn't exist - create it
+        const newAccount = await sql`
+          INSERT INTO accounts (code, name, type, description, balance, currency, is_active)
+          VALUES (${code}, ${name}, ${type}, ${description}, 0, 'CAD', true)
+          RETURNING id, type, name
+        `;
+        console.log(`[API] Created account: ${code} - ${name} (${type})`);
+        return newAccount[0];
+      };
 
-        // Service Revenue (Revenue) - increase with credit
-        await sql`UPDATE accounts SET balance = balance + ${subTotal} WHERE id = ${revenueAccount[0].id}`;
+      // Get or create required accounts with CORRECT types for reports
+      const arAccount = await getOrCreateAccount('1100', 'Accounts Receivable', 'accounts_receivable', 'Money owed by customers');
+      const revenueAccount = await getOrCreateAccount('4000', 'Service Revenue', 'income', 'Revenue from services');
+      const taxPayableAccount = await getOrCreateAccount('2100', 'Sales Tax Payable', 'other_current_liability', 'Tax collected on sales');
 
-        // Sales Tax Payable (Liability) - increase with credit
-        if (taxAmount > 0 && taxPayableAccount.length > 0) {
-          await sql`UPDATE accounts SET balance = balance + ${taxAmount} WHERE id = ${taxPayableAccount[0].id}`;
-        }
+      console.log('[API] Using accounts:', {
+        ar: { id: arAccount.id, type: arAccount.type },
+        revenue: { id: revenueAccount.id, type: revenueAccount.type },
+        tax: { id: taxPayableAccount.id, type: taxPayableAccount.type }
+      });
 
-        console.log('[API] Created ledger entries for invoice:', invoiceRef);
+      // Create ledger entries
+      // Debit Accounts Receivable for total amount
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${arAccount.id}, ${transactionId}, ${`Invoice ${invoiceRef}`}, ${invoiceAmount}, 0, ${invoiceDate})
+      `;
+
+      // Credit Service Revenue for subtotal
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${revenueAccount.id}, ${transactionId}, ${`Invoice ${invoiceRef} - Revenue`}, 0, ${subTotal}, ${invoiceDate})
+      `;
+
+      // Credit Sales Tax Payable for tax amount (if any)
+      if (taxAmount > 0) {
+        await sql`
+          INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+          VALUES (${taxPayableAccount.id}, ${transactionId}, ${`Invoice ${invoiceRef} - Tax`}, 0, ${taxAmount}, ${invoiceDate})
+        `;
       }
+
+      // Update account balances using proper debit/credit rules
+      // Asset accounts (accounts_receivable): balance += debit - credit
+      // Income accounts: balance += credit - debit
+      // Liability accounts: balance += credit - debit
+
+      // AR is asset - debits increase balance
+      await sql`UPDATE accounts SET balance = balance + ${invoiceAmount} WHERE id = ${arAccount.id}`;
+
+      // Revenue is income - credits increase balance
+      await sql`UPDATE accounts SET balance = balance + ${subTotal} WHERE id = ${revenueAccount.id}`;
+
+      // Tax Payable is liability - credits increase balance
+      if (taxAmount > 0) {
+        await sql`UPDATE accounts SET balance = balance + ${taxAmount} WHERE id = ${taxPayableAccount.id}`;
+      }
+
+      console.log('[API] Created ledger entries for invoice:', invoiceRef, {
+        arDebit: invoiceAmount,
+        revenueCredit: subTotal,
+        taxCredit: taxAmount
+      });
 
       return res.status(201).json({ id: result[0].id, success: true });
     }
@@ -1215,12 +1220,97 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Create bill
     if ((path === '/api/bills' || path.endsWith('/bills')) && req.method === 'POST') {
       const data = req.body;
+
+      // Calculate amounts
+      let billAmount = data.totalAmount || data.amount;
+      if (!billAmount && data.lineItems && Array.isArray(data.lineItems)) {
+        billAmount = data.lineItems.reduce((sum: number, item: any) => sum + (Number(item.amount) || 0), 0);
+      }
+      billAmount = Number(billAmount) || 0;
+      const subTotal = Number(data.subTotal) || billAmount;
+      const taxAmount = Number(data.taxAmount) || 0;
+
+      console.log('[API] Creating bill with amount:', billAmount, 'subTotal:', subTotal, 'taxAmount:', taxAmount);
+
       const result = await sql`
-        INSERT INTO transactions (type, reference, date, due_date, contact_id, amount, balance, currency, status, memo, sub_total)
-        VALUES ('bill', ${data.reference}, ${data.date}, ${data.dueDate}, ${data.contactId}, ${data.amount}, ${data.amount}, ${data.currency || 'CAD'}, 'open', ${data.memo || ''}, ${data.subTotal || data.amount})
+        INSERT INTO transactions (type, reference, date, due_date, contact_id, amount, balance, currency, status, memo, sub_total, tax_amount)
+        VALUES ('bill', ${data.reference}, ${data.date}, ${data.dueDate}, ${data.contactId}, ${billAmount}, ${billAmount}, ${data.currency || 'CAD'}, 'open', ${data.memo || ''}, ${subTotal}, ${taxAmount})
         RETURNING id
       `;
-      return res.status(201).json({ id: result[0].id, success: true });
+
+      const transactionId = result[0].id;
+      const billRef = data.reference || `BILL-${transactionId}`;
+      const billDate = data.date;
+
+      // Insert line items if provided
+      if (data.lineItems && Array.isArray(data.lineItems) && data.lineItems.length > 0) {
+        for (const item of data.lineItems) {
+          await sql`
+            INSERT INTO line_items (transaction_id, description, quantity, unit_price, amount, account_id, sales_tax_id, product_id)
+            VALUES (${transactionId}, ${item.description}, ${item.quantity || 1}, ${item.unitPrice || 0}, ${item.amount || 0}, ${item.accountId || null}, ${item.salesTaxId || null}, ${item.productId || null})
+          `;
+        }
+      }
+
+      // Helper function to get or create account
+      const getOrCreateAccount = async (code: string, name: string, type: string, description: string) => {
+        let account = await sql`SELECT id, type, name FROM accounts WHERE code = ${code} LIMIT 1`;
+        if (account.length > 0) {
+          if (account[0].type !== type) {
+            await sql`UPDATE accounts SET type = ${type} WHERE id = ${account[0].id}`;
+          }
+          return account[0];
+        }
+        const newAccount = await sql`
+          INSERT INTO accounts (code, name, type, description, balance, currency, is_active)
+          VALUES (${code}, ${name}, ${type}, ${description}, 0, 'CAD', true)
+          RETURNING id, type, name
+        `;
+        console.log(`[API] Created account: ${code} - ${name} (${type})`);
+        return newAccount[0];
+      };
+
+      // Get required accounts
+      const apAccount = await getOrCreateAccount('2000', 'Accounts Payable', 'accounts_payable', 'Money owed to vendors');
+      const expenseAccount = await getOrCreateAccount('5000', 'Cost of Goods Sold', 'cost_of_goods_sold', 'Direct costs');
+      const taxPayableAccount = await getOrCreateAccount('2100', 'Sales Tax Payable', 'other_current_liability', 'Tax collected on sales');
+
+      // Create ledger entries for double-entry accounting
+      // Debit expense for subtotal
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${expenseAccount.id}, ${transactionId}, ${`Bill ${billRef} - Expense`}, ${subTotal}, 0, ${billDate})
+      `;
+
+      // Debit tax payable for tax (input tax credit)
+      if (taxAmount > 0) {
+        await sql`
+          INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+          VALUES (${taxPayableAccount.id}, ${transactionId}, ${`Bill ${billRef} - Tax`}, ${taxAmount}, 0, ${billDate})
+        `;
+      }
+
+      // Credit Accounts Payable for total amount
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${apAccount.id}, ${transactionId}, ${`Bill ${billRef}`}, 0, ${billAmount}, ${billDate})
+      `;
+
+      // Update account balances
+      // Expense (debit-normal) - debits increase balance
+      await sql`UPDATE accounts SET balance = balance + ${subTotal} WHERE id = ${expenseAccount.id}`;
+
+      // Tax Payable (credit-normal) - debits DECREASE balance (input tax credit reduces liability)
+      if (taxAmount > 0) {
+        await sql`UPDATE accounts SET balance = balance - ${taxAmount} WHERE id = ${taxPayableAccount.id}`;
+      }
+
+      // Accounts Payable (credit-normal) - credits increase balance
+      await sql`UPDATE accounts SET balance = balance + ${billAmount} WHERE id = ${apAccount.id}`;
+
+      console.log('[API] Created ledger entries for bill:', billRef);
+
+      return res.status(201).json({ id: transactionId, success: true });
     }
 
     // Create vendor credit
