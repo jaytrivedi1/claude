@@ -5,6 +5,7 @@ import { PlusIcon, Eye, Edit2, Trash2 } from "lucide-react";
 import { Link } from "wouter";
 import VendorDialog from "@/components/vendors/VendorDialog";
 import VendorList from "@/components/vendors/VendorList";
+import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -76,6 +77,7 @@ export default function Expenses() {
   const [dateTo, setDateTo] = useState<Date | undefined>(undefined);
   const [transactionToDelete, setTransactionToDelete] = useState<Transaction | null>(null);
   const [isDeleteLoading, setIsDeleteLoading] = useState(false);
+  const { toast } = useToast();
   
   const { data: transactions, isLoading, refetch, error } = useQuery<Transaction[]>({
     queryKey: ['/api/transactions'],
@@ -199,15 +201,31 @@ export default function Expenses() {
   
   const handleDelete = async () => {
     if (!transactionToDelete) return;
-    
+
+    const deletingId = transactionToDelete.id;
+    const deletingRef = transactionToDelete.reference || `#${deletingId}`;
+
     setIsDeleteLoading(true);
     try {
-      await apiRequest(`/api/transactions/${transactionToDelete.id}`, 'DELETE');
+      console.log(`Attempting to delete transaction ${deletingId}...`);
+      const result = await apiRequest(`/api/transactions/${deletingId}`, 'DELETE');
+      console.log('Delete result:', result);
+
+      toast({
+        title: "Transaction deleted",
+        description: `Successfully deleted ${deletingRef}`,
+      });
+
       setTransactionToDelete(null);
       queryClient.invalidateQueries({ queryKey: ['/api/transactions'] });
       refetch();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to delete expense:', error);
+      toast({
+        title: "Delete failed",
+        description: error?.message || "Failed to delete transaction. Please try again.",
+        variant: "destructive",
+      });
     } finally {
       setIsDeleteLoading(false);
     }
