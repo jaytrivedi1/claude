@@ -1,11 +1,11 @@
 import { Link } from "wouter";
-import { 
-  Table, 
-  TableBody, 
-  TableCell, 
-  TableHead, 
-  TableHeader, 
-  TableRow 
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,13 +20,13 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { 
-  Pagination, 
-  PaginationContent, 
-  PaginationItem, 
-  PaginationLink, 
-  PaginationNext, 
-  PaginationPrevious 
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious
 } from "@/components/ui/pagination";
 import { Trash2, Edit2 } from "lucide-react";
 import { format } from "date-fns";
@@ -35,12 +35,14 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Transaction, Contact } from "@shared/schema";
 import ExportMenu from "@/components/ExportMenu";
-import { 
-  exportTransactionsToCSV, 
+import {
+  exportTransactionsToCSV,
   exportTransactionsToPDF,
-  generateFilename 
+  generateFilename
 } from "@/lib/exportUtils";
 import { formatCurrency, formatContactName } from "@/lib/currencyUtils";
+import { TableSkeleton } from "@/components/ui/skeleton";
+import { NoTransactionsEmpty } from "@/components/ui/empty-state";
 
 interface Preferences {
   homeCurrency?: string;
@@ -163,42 +165,40 @@ export default function TransactionTable({ transactions, loading = false, onDele
     exportTransactionsToPDF(transactions, contacts, `${filename}.pdf`);
   };
 
+  if (loading) {
+    return <TableSkeleton rows={6} columns={6} />;
+  }
+
+  if (transactions.length === 0) {
+    return (
+      <div className="bg-card rounded-lg border border-border p-8">
+        <NoTransactionsEmpty />
+      </div>
+    );
+  }
+
   return (
     <div className="overflow-x-auto">
-      {loading ? (
-        <div className="flex justify-center items-center py-8">
-          <p>Loading transactions...</p>
-        </div>
-      ) : (
-        <>
-          <div className="flex justify-end mb-4">
-            {transactions.length > 0 && (
-              <ExportMenu
-                onExportCSV={handleExportCSV}
-                onExportPDF={handleExportPDF}
-                label="Export Transactions"
-              />
-            )}
-          </div>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Date</TableHead>
-                <TableHead>Reference</TableHead>
-                <TableHead>Client Name</TableHead>
-                <TableHead>Amount</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {transactions.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-center py-6">
-                    No transactions found
-                  </TableCell>
-                </TableRow>
-              ) : (
+      <div className="flex justify-end mb-4">
+        <ExportMenu
+          onExportCSV={handleExportCSV}
+          onExportPDF={handleExportPDF}
+          label="Export Transactions"
+        />
+      </div>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Date</TableHead>
+            <TableHead>Reference</TableHead>
+            <TableHead>Client Name</TableHead>
+            <TableHead>Amount</TableHead>
+            <TableHead>Type</TableHead>
+            <TableHead className="text-right">Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {(
                 transactions.map((transaction) => (
                   <TableRow key={transaction.id} className="hover:bg-gray-50">
                     <TableCell className="text-sm text-gray-500">
@@ -321,7 +321,7 @@ export default function TransactionTable({ transactions, loading = false, onDele
               )}
             </TableBody>
           </Table>
-          <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200">
+          <div className="bg-card px-4 py-3 flex items-center justify-between border-t border-border">
             <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm text-gray-700">
@@ -345,8 +345,6 @@ export default function TransactionTable({ transactions, loading = false, onDele
               </Pagination>
             </div>
           </div>
-        </>
-      )}
     </div>
   );
 }

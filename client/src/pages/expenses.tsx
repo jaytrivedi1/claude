@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import { PlusIcon, Eye, Edit2, Trash2 } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import VendorDialog from "@/components/vendors/VendorDialog";
 import VendorList from "@/components/vendors/VendorList";
 import { useToast } from "@/hooks/use-toast";
@@ -65,6 +65,8 @@ import { apiRequest } from "@/lib/queryClient";
 import { queryClient } from "@/lib/queryClient";
 import { CalendarIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { PageSkeleton, TableSkeleton, CardSkeleton } from "@/components/ui/skeleton";
+import { EmptyState, NoExpensesEmpty, NoSearchResultsEmpty } from "@/components/ui/empty-state";
 
 interface Preferences {
   homeCurrency?: string;
@@ -402,17 +404,30 @@ export default function Expenses() {
             </TabsList>
             
             <TabsContent value="expenses" className="mt-4">
-              <div className="bg-white shadow-sm rounded-lg overflow-hidden">
+              {isLoading ? (
+                <TableSkeleton rows={6} columns={7} />
+              ) : error ? (
+                <div className="bg-card rounded-lg border border-border p-8">
+                  <EmptyState
+                    icon="expenses"
+                    title="Unable to load expenses"
+                    description="There was an error loading your expenses. Please try again."
+                    actionLabel="Retry"
+                    onAction={() => refetch()}
+                    size="sm"
+                  />
+                </div>
+              ) : expenses.length === 0 && !searchQuery ? (
+                <div className="bg-card rounded-lg border border-border p-8">
+                  <NoExpensesEmpty onCreateExpense={() => window.location.href = '/expenses/new'} />
+                </div>
+              ) : expenses.length === 0 && searchQuery ? (
+                <div className="bg-card rounded-lg border border-border p-8">
+                  <NoSearchResultsEmpty query={searchQuery} />
+                </div>
+              ) : (
+              <div className="bg-card shadow-sm rounded-lg overflow-hidden border border-border">
                 <div className="overflow-x-auto">
-                  {isLoading ? (
-                    <div className="flex justify-center items-center py-8">
-                      <p data-testid="text-loading">Loading expenses...</p>
-                    </div>
-                  ) : error ? (
-                    <div className="flex justify-center items-center py-8">
-                      <p className="text-red-500" data-testid="text-error">Error loading expenses. Please try again.</p>
-                    </div>
-                  ) : (
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -426,13 +441,7 @@ export default function Expenses() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {expenses.length === 0 ? (
-                          <TableRow>
-                            <TableCell colSpan={7} className="text-center py-6" data-testid="text-no-expenses">
-                              No expenses found
-                            </TableCell>
-                          </TableRow>
-                        ) : (
+                        {(
                           expenses.map((expense) => (
                             <TableRow key={expense.id} className="hover:bg-gray-50" data-testid={`row-expense-${expense.id}`}>
                               <TableCell className="text-sm text-gray-900" data-testid={`text-reference-${expense.id}`}>
@@ -527,23 +536,38 @@ export default function Expenses() {
                         )}
                       </TableBody>
                     </Table>
-                  )}
                 </div>
               </div>
+              )}
             </TabsContent>
-            
+
             <TabsContent value="bills" className="mt-4">
-              <div className="bg-white shadow-sm rounded-lg overflow-hidden">
+              {isLoading ? (
+                <TableSkeleton rows={6} columns={7} />
+              ) : error ? (
+                <div className="bg-card rounded-lg border border-border p-8">
+                  <EmptyState
+                    icon="expenses"
+                    title="Unable to load bills"
+                    description="There was an error loading your bills. Please try again."
+                    actionLabel="Retry"
+                    onAction={() => refetch()}
+                    size="sm"
+                  />
+                </div>
+              ) : bills.length === 0 ? (
+                <div className="bg-card rounded-lg border border-border p-8">
+                  <EmptyState
+                    icon="expenses"
+                    title="No bills yet"
+                    description="Bills from vendors will appear here. Create a bill to track what you owe."
+                    actionLabel="Create Bill"
+                    onAction={() => window.location.href = '/bills/new'}
+                  />
+                </div>
+              ) : (
+              <div className="bg-card shadow-sm rounded-lg overflow-hidden border border-border">
                 <div className="overflow-x-auto">
-                  {isLoading ? (
-                    <div className="flex justify-center items-center py-8">
-                      <p data-testid="text-loading-bills">Loading bills...</p>
-                    </div>
-                  ) : error ? (
-                    <div className="flex justify-center items-center py-8">
-                      <p className="text-red-500" data-testid="text-error-bills">Error loading bills. Please try again.</p>
-                    </div>
-                  ) : (
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -557,13 +581,7 @@ export default function Expenses() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {bills.length === 0 ? (
-                          <TableRow>
-                            <TableCell colSpan={7} className="text-center py-6" data-testid="text-no-bills">
-                              No bills found
-                            </TableCell>
-                          </TableRow>
-                        ) : (
+                        {(
                           bills.map((bill) => (
                             <TableRow key={bill.id} className="hover:bg-gray-50" data-testid={`row-bill-${bill.id}`}>
                               <TableCell className="text-sm text-gray-900" data-testid={`text-bill-reference-${bill.id}`}>
@@ -658,9 +676,9 @@ export default function Expenses() {
                         )}
                       </TableBody>
                     </Table>
-                  )}
                 </div>
               </div>
+              )}
             </TabsContent>
             
             <TabsContent value="vendors" className="mt-4">

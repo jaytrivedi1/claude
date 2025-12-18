@@ -54,6 +54,8 @@ import { Transaction, RecurringTemplate } from "@shared/schema";
 import { formatCurrency } from "@/lib/currencyUtils";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { PageSkeleton, TableSkeleton, CardSkeleton } from "@/components/ui/skeleton";
+import { EmptyState, NoInvoicesEmpty, NoSearchResultsEmpty } from "@/components/ui/empty-state";
 
 interface Preferences {
   homeCurrency?: string;
@@ -341,17 +343,17 @@ export default function Invoices() {
             
             <TabsContent value="recurring" className="mt-4">
               {recurringLoading ? (
-                <div className="text-center py-8">Loading...</div>
+                <TableSkeleton rows={4} columns={6} />
               ) : recurringTemplates.length === 0 ? (
-                <Card>
-                  <CardContent className="text-center py-12">
-                    <Clock className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                    <p className="text-gray-600">No recurring invoice templates yet</p>
-                    <Link href="/recurring-invoices/new">
-                      <Button variant="outline" className="mt-4">Create First Template</Button>
-                    </Link>
-                  </CardContent>
-                </Card>
+                <div className="bg-card rounded-lg border border-border p-8">
+                  <EmptyState
+                    icon="invoices"
+                    title="No recurring templates yet"
+                    description="Set up recurring invoices to automatically bill customers on a schedule."
+                    actionLabel="Create Recurring Invoice"
+                    onAction={() => window.location.href = '/recurring-invoices/new'}
+                  />
+                </div>
               ) : (
                 <Card>
                   <CardHeader>
