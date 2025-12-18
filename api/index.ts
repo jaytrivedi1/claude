@@ -1130,6 +1130,52 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       }
 
+      // Create ledger entries for double-entry accounting
+      const transactionId = result[0].id;
+      const invoiceRef = data.reference || `INV-${transactionId}`;
+      const invoiceDate = data.date;
+
+      // Get required accounts
+      const arAccount = await sql`SELECT id FROM accounts WHERE code = '1100' LIMIT 1`;
+      const revenueAccount = await sql`SELECT id FROM accounts WHERE code = '4000' LIMIT 1`;
+      const taxPayableAccount = await sql`SELECT id FROM accounts WHERE code = '2100' LIMIT 1`;
+
+      if (arAccount.length > 0 && revenueAccount.length > 0) {
+        // Debit Accounts Receivable for total amount
+        await sql`
+          INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+          VALUES (${arAccount[0].id}, ${transactionId}, ${`Invoice ${invoiceRef}`}, ${invoiceAmount}, 0, ${invoiceDate})
+        `;
+
+        // Credit Service Revenue for subtotal
+        await sql`
+          INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+          VALUES (${revenueAccount[0].id}, ${transactionId}, ${`Invoice ${invoiceRef} - Revenue`}, 0, ${subTotal}, ${invoiceDate})
+        `;
+
+        // Credit Sales Tax Payable for tax amount (if any)
+        if (taxAmount > 0 && taxPayableAccount.length > 0) {
+          await sql`
+            INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+            VALUES (${taxPayableAccount[0].id}, ${transactionId}, ${`Invoice ${invoiceRef} - Tax`}, 0, ${taxAmount}, ${invoiceDate})
+          `;
+        }
+
+        // Update account balances
+        // Accounts Receivable (Asset) - increase with debit
+        await sql`UPDATE accounts SET balance = balance + ${invoiceAmount} WHERE id = ${arAccount[0].id}`;
+
+        // Service Revenue (Revenue) - increase with credit
+        await sql`UPDATE accounts SET balance = balance + ${subTotal} WHERE id = ${revenueAccount[0].id}`;
+
+        // Sales Tax Payable (Liability) - increase with credit
+        if (taxAmount > 0 && taxPayableAccount.length > 0) {
+          await sql`UPDATE accounts SET balance = balance + ${taxAmount} WHERE id = ${taxPayableAccount[0].id}`;
+        }
+
+        console.log('[API] Created ledger entries for invoice:', invoiceRef);
+      }
+
       return res.status(201).json({ id: result[0].id, success: true });
     }
 
