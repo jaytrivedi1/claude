@@ -2096,9 +2096,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
       }
-      
+
+      // CRITICAL: Final validation before creating transaction
+      console.log('[Invoice Route] Transaction object before createTransaction:', JSON.stringify({
+        amount: transaction.amount,
+        balance: transaction.balance,
+        subTotal: transaction.subTotal,
+        taxAmount: transaction.taxAmount,
+        type: transaction.type,
+        reference: transaction.reference
+      }));
+
+      // Ensure amount is valid - this MUST not be null/undefined/NaN
+      if (transaction.amount === null || transaction.amount === undefined || !Number.isFinite(transaction.amount)) {
+        console.error('[Invoice Route] CRITICAL: Invalid amount detected!', {
+          amount: transaction.amount,
+          totalAmount,
+          lineItemsTotal: invoiceData.lineItems.reduce((s, i) => s + (i.amount || 0), 0)
+        });
+        // Force recalculation
+        transaction.amount = invoiceData.lineItems.reduce((sum, item) => sum + (item.amount || 0), 0) + (taxAmount || 0);
+        transaction.balance = transaction.amount;
+        console.log('[Invoice Route] Recalculated amount:', transaction.amount);
+      }
+
       const newTransaction = await storage.createTransaction(transaction, lineItems, ledgerEntries);
-      
+
       // Process applied credits if any were included
       if (req.body.appliedCredits && Array.isArray(req.body.appliedCredits) && req.body.appliedCredits.length > 0) {
         // Create a payment to apply the credits against the invoice
