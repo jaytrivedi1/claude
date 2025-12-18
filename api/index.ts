@@ -247,7 +247,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Get preferences
-    if ((path === '/api/preferences' || path.endsWith('/preferences')) && req.method === 'GET') {
+    if ((path === '/api/preferences' || path === '/api/settings/preferences' || path.endsWith('/preferences')) && req.method === 'GET') {
       const prefs = await sql`SELECT * FROM preferences LIMIT 1`;
       if (prefs.length > 0) {
         return res.status(200).json(transformKeys(prefs[0]));
