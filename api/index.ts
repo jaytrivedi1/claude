@@ -488,13 +488,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ]);
     }
 
-    // Income Statement report
+    // Income Statement report - with date filtering
     if ((path === '/api/reports/income-statement' || path.endsWith('/income-statement')) && req.method === 'GET') {
+      const url = new URL(req.url || '', `http://${req.headers.host}`);
+      const startDateStr = url.searchParams.get('startDate');
+      const endDateStr = url.searchParams.get('endDate');
+
+      // Build date filter condition
+      const dateFilter = startDateStr && endDateStr
+        ? sql`AND le.date >= ${startDateStr}::date AND le.date <= ${endDateStr}::date`
+        : sql``;
+
       // Get revenue accounts (type = 'income')
       const revenueAccounts = await sql`
         SELECT a.id, a.name, a.code, a.type, COALESCE(SUM(le.credit - le.debit), 0) as balance
         FROM accounts a
-        LEFT JOIN ledger_entries le ON a.id = le.account_id
+        LEFT JOIN ledger_entries le ON a.id = le.account_id ${dateFilter}
         WHERE a.type = 'income'
         AND a.is_active = true
         GROUP BY a.id, a.name, a.code, a.type
@@ -505,7 +514,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const cogsAccounts = await sql`
         SELECT a.id, a.name, a.code, a.type, COALESCE(SUM(le.debit - le.credit), 0) as balance
         FROM accounts a
-        LEFT JOIN ledger_entries le ON a.id = le.account_id
+        LEFT JOIN ledger_entries le ON a.id = le.account_id ${dateFilter}
         WHERE a.type = 'cost_of_goods_sold'
         AND a.is_active = true
         GROUP BY a.id, a.name, a.code, a.type
@@ -516,7 +525,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const expenseAccounts = await sql`
         SELECT a.id, a.name, a.code, a.type, COALESCE(SUM(le.debit - le.credit), 0) as balance
         FROM accounts a
-        LEFT JOIN ledger_entries le ON a.id = le.account_id
+        LEFT JOIN ledger_entries le ON a.id = le.account_id ${dateFilter}
         WHERE a.type = 'expenses'
         AND a.is_active = true
         GROUP BY a.id, a.name, a.code, a.type
@@ -527,7 +536,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const otherIncomeAccounts = await sql`
         SELECT a.id, a.name, a.code, a.type, COALESCE(SUM(le.credit - le.debit), 0) as balance
         FROM accounts a
-        LEFT JOIN ledger_entries le ON a.id = le.account_id
+        LEFT JOIN ledger_entries le ON a.id = le.account_id ${dateFilter}
         WHERE a.type = 'other_income'
         AND a.is_active = true
         GROUP BY a.id, a.name, a.code, a.type
@@ -538,7 +547,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const otherExpenseAccounts = await sql`
         SELECT a.id, a.name, a.code, a.type, COALESCE(SUM(le.debit - le.credit), 0) as balance
         FROM accounts a
-        LEFT JOIN ledger_entries le ON a.id = le.account_id
+        LEFT JOIN ledger_entries le ON a.id = le.account_id ${dateFilter}
         WHERE a.type = 'other_expense'
         AND a.is_active = true
         GROUP BY a.id, a.name, a.code, a.type
@@ -711,19 +720,180 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(result);
     }
 
-    // Cash Flow report
+    // Cash Flow report - with date filtering and categories
     if ((path === '/api/reports/cash-flow' || path.endsWith('/cash-flow')) && req.method === 'GET') {
-      const operating = await sql`
-        SELECT COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END), 0) as total
-        FROM transactions
-        WHERE type IN ('invoice', 'expense', 'bill')
-      `;
-      return res.status(200).json({
-        operating: { total: Number(operating[0]?.total) || 0, items: [] },
-        investing: { total: 0, items: [] },
-        financing: { total: 0, items: [] },
-        netChange: Number(operating[0]?.total) || 0
+      const url = new URL(req.url || '', `http://${req.headers.host}`);
+      const startDateStr = url.searchParams.get('startDate');
+      const endDateStr = url.searchParams.get('endDate');
+
+      // Get all accounts with cash flow categories
+      const allAccounts = await sql`SELECT * FROM accounts WHERE is_active = true`;
+
+      // Get ledger entries (filtered by date if provided)
+      let ledgerEntries;
+      if (startDateStr && endDateStr) {
+        ledgerEntries = await sql`
+          SELECT le.*, a.type as account_type, a.name as account_name, a.code as account_code, a.cash_flow_category
+          FROM ledger_entries le
+          JOIN accounts a ON le.account_id = a.id
+          WHERE le.date >= ${startDateStr}::date AND le.date <= ${endDateStr}::date
+        `;
+      } else {
+        ledgerEntries = await sql`
+          SELECT le.*, a.type as account_type, a.name as account_name, a.code as account_code, a.cash_flow_category
+          FROM ledger_entries le
+          JOIN accounts a ON le.account_id = a.id
+        `;
+      }
+
+      // Calculate net cash flow for bank accounts
+      const bankAccounts = allAccounts.filter((a: any) => a.type === 'bank');
+      let totalCashChange = 0;
+      bankAccounts.forEach((bankAccount: any) => {
+        const bankEntries = ledgerEntries.filter((e: any) => e.account_id === bankAccount.id);
+        let netChange = 0;
+        bankEntries.forEach((entry: any) => {
+          netChange += Number(entry.debit) - Number(entry.credit);
+        });
+        totalCashChange += netChange;
       });
+
+      // Group non-bank entries by category
+      const accountTotals = new Map<number, { name: string; code: string; category: string; total: number }>();
+      ledgerEntries.forEach((entry: any) => {
+        if (entry.account_type === 'bank') return;
+        const category = entry.cash_flow_category || 'operating';
+        const accountId = entry.account_id;
+        if (!accountTotals.has(accountId)) {
+          accountTotals.set(accountId, { name: entry.account_name, code: entry.account_code, category, total: 0 });
+        }
+        const current = accountTotals.get(accountId)!;
+        current.total += Number(entry.credit) - Number(entry.debit);
+      });
+
+      const operatingItems: any[] = [];
+      const investingItems: any[] = [];
+      const financingItems: any[] = [];
+      let operatingTotal = 0, investingTotal = 0, financingTotal = 0;
+
+      accountTotals.forEach((item, accountId) => {
+        if (item.total === 0) return;
+        const entry = { id: accountId, name: item.name, code: item.code, amount: Math.round(item.total * 100) / 100 };
+        if (item.category === 'investing') { investingItems.push(entry); investingTotal += item.total; }
+        else if (item.category === 'financing') { financingItems.push(entry); financingTotal += item.total; }
+        else { operatingItems.push(entry); operatingTotal += item.total; }
+      });
+
+      return res.status(200).json({
+        operating: { items: operatingItems.filter(i => i.amount !== 0), total: Math.round(operatingTotal * 100) / 100 },
+        investing: { items: investingItems.filter(i => i.amount !== 0), total: Math.round(investingTotal * 100) / 100 },
+        financing: { items: financingItems.filter(i => i.amount !== 0), total: Math.round(financingTotal * 100) / 100 },
+        netChange: Math.round(totalCashChange * 100) / 100
+      });
+    }
+
+    // General Ledger report - date range filtering
+    if ((path === '/api/reports/general-ledger' || path.endsWith('/general-ledger')) && req.method === 'GET') {
+      const url = new URL(req.url || '', `http://${req.headers.host}`);
+      const startDateStr = url.searchParams.get('startDate');
+      const endDateStr = url.searchParams.get('endDate');
+
+      let ledgerEntries;
+      if (startDateStr && endDateStr) {
+        ledgerEntries = await sql`
+          SELECT le.*, a.name as account_name, a.code as account_code, a.type as account_type,
+                 t.reference, t.type as transaction_type, t.status as transaction_status
+          FROM ledger_entries le
+          LEFT JOIN accounts a ON le.account_id = a.id
+          LEFT JOIN transactions t ON le.transaction_id = t.id
+          WHERE le.date >= ${startDateStr}::date AND le.date <= ${endDateStr}::date
+          ORDER BY le.date DESC, le.id DESC
+        `;
+      } else {
+        ledgerEntries = await sql`
+          SELECT le.*, a.name as account_name, a.code as account_code, a.type as account_type,
+                 t.reference, t.type as transaction_type, t.status as transaction_status
+          FROM ledger_entries le
+          LEFT JOIN accounts a ON le.account_id = a.id
+          LEFT JOIN transactions t ON le.transaction_id = t.id
+          ORDER BY le.date DESC, le.id DESC
+          LIMIT 500
+        `;
+      }
+
+      const enrichedEntries = ledgerEntries.map((entry: any) => ({
+        ...transformKeys(entry),
+        account: entry.account_id ? { id: entry.account_id, code: entry.account_code, name: entry.account_name, type: entry.account_type } : null,
+        transaction: entry.transaction_id ? { id: entry.transaction_id, type: entry.transaction_type, reference: entry.reference, status: entry.transaction_status } : null
+      }));
+
+      return res.status(200).json(enrichedEntries);
+    }
+
+    // General Ledger Grouped report - QuickBooks style
+    if ((path === '/api/reports/general-ledger-grouped' || path.endsWith('/general-ledger-grouped')) && req.method === 'GET') {
+      const url = new URL(req.url || '', `http://${req.headers.host}`);
+      const startDateStr = url.searchParams.get('startDate');
+      const endDateStr = url.searchParams.get('endDate');
+      const accountIdStr = url.searchParams.get('accountId');
+
+      if (!startDateStr || !endDateStr) {
+        return res.status(400).json({ message: "startDate and endDate are required" });
+      }
+
+      const startDate = new Date(startDateStr);
+      const endDate = new Date(endDateStr);
+
+      let accounts;
+      if (accountIdStr) {
+        accounts = await sql`SELECT * FROM accounts WHERE id = ${parseInt(accountIdStr)} AND is_active = true`;
+      } else {
+        accounts = await sql`SELECT * FROM accounts WHERE is_active = true ORDER BY code`;
+      }
+
+      const allLedgerEntries = await sql`SELECT * FROM ledger_entries ORDER BY date, id`;
+      const allTransactions = await sql`SELECT * FROM transactions`;
+      const allContacts = await sql`SELECT * FROM contacts`;
+
+      const transactionMap = new Map(allTransactions.map((tx: any) => [tx.id, tx]));
+      const contactMap = new Map(allContacts.map((c: any) => [c.id, c]));
+
+      const accountGroups = accounts.map((account: any) => {
+        const beginningBalanceEntries = allLedgerEntries.filter((entry: any) =>
+          entry.account_id === account.id && new Date(entry.date) < startDate
+        );
+        let beginningBalance = 0;
+        beginningBalanceEntries.forEach((entry: any) => {
+          beginningBalance += Number(entry.debit || 0) - Number(entry.credit || 0);
+        });
+
+        const accountEntries = allLedgerEntries.filter((entry: any) =>
+          entry.account_id === account.id && new Date(entry.date) >= startDate && new Date(entry.date) <= endDate
+        );
+
+        let runningBalance = beginningBalance;
+        const entries = accountEntries.map((entry: any) => {
+          const transaction = transactionMap.get(entry.transaction_id);
+          const contact = transaction?.contact_id ? contactMap.get(transaction.contact_id) : null;
+          runningBalance += Number(entry.debit || 0) - Number(entry.credit || 0);
+          return {
+            id: entry.id, date: entry.date, description: entry.description,
+            debit: Number(entry.debit) || 0, credit: Number(entry.credit) || 0, balance: runningBalance,
+            transaction: transaction ? { id: transaction.id, type: transaction.type, reference: transaction.reference, contactName: contact?.name || null } : null
+          };
+        });
+
+        return {
+          account: { id: account.id, code: account.code, name: account.name, type: account.type },
+          beginningBalance, entries,
+          totalDebits: accountEntries.reduce((sum: number, e: any) => sum + (Number(e.debit) || 0), 0),
+          totalCredits: accountEntries.reduce((sum: number, e: any) => sum + (Number(e.credit) || 0), 0),
+          endingBalance: runningBalance
+        };
+      });
+
+      const filteredGroups = accountGroups.filter((g: any) => g.entries.length > 0 || g.beginningBalance !== 0);
+      return res.status(200).json(filteredGroups);
     }
 
     // Activity logs
