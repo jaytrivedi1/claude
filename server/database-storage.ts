@@ -418,6 +418,21 @@ export class DatabaseStorage implements IStorage {
           (transaction as any).foreignAmount.toString() : null;
       }
       
+      // Log transaction data right before insert
+      console.log('[createTransaction] FINAL transactionData before insert:', JSON.stringify({
+        amount: transactionData.amount,
+        balance: transactionData.balance,
+        subTotal: transactionData.subTotal,
+        taxAmount: transactionData.taxAmount,
+        type: transactionData.type,
+        reference: transactionData.reference
+      }));
+
+      // Final safeguard - ensure amount is not null/undefined/NaN
+      if (transactionData.amount === null || transactionData.amount === undefined || Number.isNaN(transactionData.amount)) {
+        throw new Error(`Cannot insert transaction with invalid amount: ${transactionData.amount}`);
+      }
+
       // Insert transaction
       const [newTx] = await tx.insert(transactions).values(transactionData).returning();
       
