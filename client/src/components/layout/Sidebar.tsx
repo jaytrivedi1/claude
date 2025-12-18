@@ -78,12 +78,12 @@ export default function Sidebar({ open, setOpen }: SidebarProps) {
       )}
     >
       {/* Logo section */}
-      <div className="flex items-center justify-between px-4 py-5 border-b border-border/30">
+      <div className="flex items-center justify-between px-4 py-5 border-b border-border/50">
         <div className="flex items-center space-x-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-accent flex items-center justify-center shadow-lg glow">
+          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shadow-sm">
             <BarChart4Icon className="w-5 h-5 text-white" />
           </div>
-          <span className="text-xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+          <span className="text-xl font-bold text-foreground">
             Vedo
           </span>
         </div>
@@ -110,10 +110,10 @@ export default function Sidebar({ open, setOpen }: SidebarProps) {
             key={item.path}
             href={item.path}
             className={cn(
-              "flex items-center px-3 py-2.5 text-sm font-medium rounded-lg smooth-transition group",
+              "flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-base group",
               location === item.path
-                ? "text-white bg-gradient-to-r from-primary to-accent shadow-md glow"
-                : "text-foreground hover:text-primary hover:bg-muted/50"
+                ? "text-white bg-primary shadow-sm"
+                : "text-foreground hover:text-primary hover:bg-muted"
             )}
             data-testid={`nav-${item.label.toLowerCase().replace(/\s/g, '-')}`}
           >
@@ -132,9 +132,9 @@ export default function Sidebar({ open, setOpen }: SidebarProps) {
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <div className="flex items-center px-4 py-3 hover:bg-muted/30 border-t border-border/30 smooth-transition group cursor-pointer" data-testid="user-profile-section">
+            <div className="flex items-center px-4 py-3 hover:bg-muted border-t border-border/50 transition-base group cursor-pointer" data-testid="user-profile-section">
               <div className="flex-shrink-0">
-                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center text-white font-bold shadow-md glow-hover smooth-transition group-hover:scale-110">
+                <div className="w-9 h-9 rounded-full bg-primary flex items-center justify-center text-white font-bold shadow-sm transition-base group-hover:scale-105">
                   {user?.firstName?.[0] || user?.username?.[0] || 'U'}
                   {user?.lastName?.[0] || ''}
                 </div>
@@ -149,10 +149,10 @@ export default function Sidebar({ open, setOpen }: SidebarProps) {
               </div>
             </div>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56 glass-card border-border/50">
-            <DropdownMenuItem 
-              onClick={() => logout()} 
-              className="cursor-pointer smooth-transition hover:bg-destructive/10 text-destructive"
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuItem
+              onClick={() => logout()}
+              className="cursor-pointer transition-base hover:bg-destructive/10 text-destructive"
               data-testid="button-logout"
             >
               <LogOutIcon className="w-4 h-4 mr-2" />
