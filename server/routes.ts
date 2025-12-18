@@ -1852,12 +1852,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       
       // Calculate amount from line items or use provided total amount with rounding
-      const totalAmount = roundTo2Decimals(invoiceData.totalAmount || 
-        invoiceData.lineItems.reduce((sum, item) => sum + item.amount, 0));
-      
+      const lineItemsTotal = invoiceData.lineItems.reduce((sum, item) => sum + (item.amount || 0), 0);
+      let totalAmount = roundTo2Decimals(invoiceData.totalAmount || lineItemsTotal);
+
+      // Ensure totalAmount is a valid number (not NaN or undefined)
+      if (!Number.isFinite(totalAmount) || totalAmount < 0) {
+        console.error('Invalid totalAmount detected:', { totalAmount, invoiceDataTotalAmount: invoiceData.totalAmount, lineItemsTotal });
+        totalAmount = lineItemsTotal > 0 ? lineItemsTotal : 0;
+      }
+
       // Use the provided subtotal and tax amount from the client with rounding
-      const subTotal = roundTo2Decimals(invoiceData.subTotal || totalAmount);
-      const taxAmount = roundTo2Decimals(invoiceData.taxAmount || 0);
+      let subTotal = roundTo2Decimals(invoiceData.subTotal || totalAmount);
+      let taxAmount = roundTo2Decimals(invoiceData.taxAmount || 0);
+
+      // Ensure subTotal and taxAmount are valid numbers
+      if (!Number.isFinite(subTotal)) subTotal = totalAmount;
+      if (!Number.isFinite(taxAmount)) taxAmount = 0;
       
       // Get home currency from preferences
       const preferences = await storage.getPreferences();
@@ -1903,11 +1913,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Create line items with proper handling of salesTaxId and productId
       const lineItems = invoiceData.lineItems.map(item => {
+        // Ensure amount is a valid number
+        const itemAmount = Number.isFinite(item.amount) ? roundTo2Decimals(item.amount) : roundTo2Decimals(item.quantity * item.unitPrice);
+
         const lineItem: any = {
           description: item.description,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          amount: roundTo2Decimals(item.amount),
+          quantity: item.quantity || 1,
+          unitPrice: item.unitPrice || 0,
+          amount: itemAmount,
           transactionId: 0 // Will be set by createTransaction
         };
         
