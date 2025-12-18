@@ -490,20 +490,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Income Statement report
     if ((path === '/api/reports/income-statement' || path.endsWith('/income-statement')) && req.method === 'GET') {
+      // Get all income accounts (income, other_income)
       const income = await sql`
-        SELECT a.id, a.name, a.code, COALESCE(SUM(le.credit - le.debit), 0) as total
+        SELECT a.id, a.name, a.code, a.type, COALESCE(SUM(le.credit - le.debit), 0) as total
         FROM accounts a
         LEFT JOIN ledger_entries le ON a.id = le.account_id
-        WHERE a.type = 'income'
-        GROUP BY a.id, a.name, a.code
+        WHERE a.type IN ('income', 'other_income')
+        AND a.is_active = true
+        GROUP BY a.id, a.name, a.code, a.type
+        HAVING COALESCE(SUM(le.credit - le.debit), 0) != 0
         ORDER BY a.code
       `;
+      // Get all expense accounts (expenses, cost_of_goods_sold, other_expense)
       const expenses = await sql`
-        SELECT a.id, a.name, a.code, COALESCE(SUM(le.debit - le.credit), 0) as total
+        SELECT a.id, a.name, a.code, a.type, COALESCE(SUM(le.debit - le.credit), 0) as total
         FROM accounts a
         LEFT JOIN ledger_entries le ON a.id = le.account_id
-        WHERE a.type = 'expense'
-        GROUP BY a.id, a.name, a.code
+        WHERE a.type IN ('expenses', 'cost_of_goods_sold', 'other_expense')
+        AND a.is_active = true
+        GROUP BY a.id, a.name, a.code, a.type
+        HAVING COALESCE(SUM(le.debit - le.credit), 0) != 0
         ORDER BY a.code
       `;
       const totalIncome = income.reduce((sum: number, i: any) => sum + Number(i.total), 0);
@@ -519,22 +525,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Balance Sheet report
     if ((path === '/api/reports/balance-sheet' || path.endsWith('/balance-sheet')) && req.method === 'GET') {
+      // Get all asset accounts
       const assets = await sql`
-        SELECT a.id, a.name, a.code, a.balance as total
+        SELECT a.id, a.name, a.code, a.type, a.balance as total
         FROM accounts a
-        WHERE a.type IN ('bank', 'accounts_receivable', 'other_current_asset', 'fixed_asset')
+        WHERE a.type IN ('bank', 'accounts_receivable', 'current_assets', 'other_current_asset', 'fixed_asset', 'property_plant_equipment', 'long_term_assets')
         AND a.is_active = true
+        AND a.balance != 0
         ORDER BY a.code
       `;
+      // Get all liability accounts
       const liabilities = await sql`
-        SELECT a.id, a.name, a.code, a.balance as total
+        SELECT a.id, a.name, a.code, a.type, a.balance as total
         FROM accounts a
         WHERE a.type IN ('accounts_payable', 'credit_card', 'other_current_liability', 'long_term_liability')
         AND a.is_active = true
+        AND a.balance != 0
         ORDER BY a.code
       `;
+      // Get all equity accounts
       const equity = await sql`
-        SELECT a.id, a.name, a.code, a.balance as total
+        SELECT a.id, a.name, a.code, a.type, a.balance as total
         FROM accounts a
         WHERE a.type = 'equity'
         AND a.is_active = true
@@ -1322,6 +1333,588 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         RETURNING id
       `;
       return res.status(201).json({ id: result[0].id, success: true });
+    }
+
+    // Receive payment (customer payment)
+    if ((path === '/api/payments' || path.endsWith('/payments')) && req.method === 'POST') {
+      const data = req.body;
+      const lineItems = data.lineItems || [];
+      const paymentAmount = Number(data.amount) || 0;
+      const unappliedAmount = Number(data.unappliedAmount) || 0;
+
+      console.log('[API] Processing payment:', { amount: paymentAmount, lineItems: lineItems.length, unapplied: unappliedAmount });
+
+      // Create the payment transaction
+      const result = await sql`
+        INSERT INTO transactions (type, reference, date, contact_id, amount, balance, currency, status, memo)
+        VALUES ('payment', ${data.reference}, ${data.date}, ${data.contactId}, ${paymentAmount}, ${unappliedAmount}, ${data.currency || 'CAD'}, ${unappliedAmount > 0 ? 'unapplied_credit' : 'completed'}, ${data.description || 'Payment received'})
+        RETURNING id
+      `;
+
+      const paymentId = result[0].id;
+      const paymentDate = data.date;
+
+      // Helper to get or create account
+      const getOrCreateAccount = async (code: string, name: string, type: string, description: string) => {
+        let account = await sql`SELECT id, type FROM accounts WHERE code = ${code} LIMIT 1`;
+        if (account.length > 0) {
+          if (account[0].type !== type) {
+            await sql`UPDATE accounts SET type = ${type} WHERE id = ${account[0].id}`;
+          }
+          return account[0];
+        }
+        const newAccount = await sql`
+          INSERT INTO accounts (code, name, type, description, balance, currency, is_active)
+          VALUES (${code}, ${name}, ${type}, ${description}, 0, 'CAD', true)
+          RETURNING id, type
+        `;
+        return newAccount[0];
+      };
+
+      // Get required accounts
+      const bankAccount = data.depositAccountId
+        ? (await sql`SELECT id, type FROM accounts WHERE id = ${data.depositAccountId} LIMIT 1`)[0]
+        : await getOrCreateAccount('1000', 'Cash', 'bank', 'Cash on hand');
+      const arAccount = await getOrCreateAccount('1100', 'Accounts Receivable', 'accounts_receivable', 'Money owed by customers');
+
+      // Create ledger entries
+      // Debit bank account (increase cash)
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${bankAccount.id}, ${paymentId}, ${`Payment received ${data.reference || ''}`}, ${paymentAmount}, 0, ${paymentDate})
+      `;
+
+      // Process invoice payments
+      const invoiceItems = lineItems.filter((item: any) => !item.type || item.type === 'invoice');
+      let totalApplied = 0;
+
+      for (const item of invoiceItems) {
+        if (!item.transactionId || !item.amount) continue;
+        const appliedAmount = Number(item.amount);
+        totalApplied += appliedAmount;
+
+        // Get the invoice
+        const invoice = await sql`SELECT id, reference, balance, amount FROM transactions WHERE id = ${item.transactionId} LIMIT 1`;
+        if (invoice.length === 0) continue;
+
+        // Credit AR for the applied amount
+        await sql`
+          INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+          VALUES (${arAccount.id}, ${paymentId}, ${`Payment applied to invoice #${invoice[0].reference}`}, 0, ${appliedAmount}, ${paymentDate})
+        `;
+
+        // Update invoice balance and status
+        const currentBalance = Number(invoice[0].balance) || Number(invoice[0].amount);
+        const newBalance = Math.max(0, currentBalance - appliedAmount);
+        const newStatus = newBalance <= 0 ? 'paid' : 'partial';
+
+        await sql`UPDATE transactions SET balance = ${newBalance}, status = ${newStatus} WHERE id = ${item.transactionId}`;
+
+        // Record payment application
+        await sql`
+          INSERT INTO payment_applications (payment_id, invoice_id, amount_applied)
+          VALUES (${paymentId}, ${item.transactionId}, ${appliedAmount})
+        `;
+
+        console.log(`[API] Applied ${appliedAmount} to invoice ${invoice[0].reference}, new balance: ${newBalance}`);
+      }
+
+      // Handle unapplied credit
+      if (unappliedAmount > 0) {
+        await sql`
+          INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+          VALUES (${arAccount.id}, ${paymentId}, ${`Unapplied credit`}, 0, ${unappliedAmount}, ${paymentDate})
+        `;
+      }
+
+      // Update account balances
+      // Bank (asset) - debits increase
+      await sql`UPDATE accounts SET balance = balance + ${paymentAmount} WHERE id = ${bankAccount.id}`;
+      // AR (asset) - credits decrease
+      const arDecreaseAmount = totalApplied + unappliedAmount;
+      if (arDecreaseAmount > 0) {
+        await sql`UPDATE accounts SET balance = balance - ${arDecreaseAmount} WHERE id = ${arAccount.id}`;
+      }
+
+      console.log('[API] Payment created:', paymentId);
+      return res.status(201).json({ id: paymentId, success: true });
+    }
+
+    // Pay bills (vendor payment)
+    if ((path === '/api/payments/pay-bills' || path.endsWith('/pay-bills')) && req.method === 'POST') {
+      const data = req.body;
+      const bills = data.bills || [];
+      const paymentAmount = Number(data.amount) || bills.reduce((sum: number, b: any) => sum + Number(b.amount || 0), 0);
+
+      console.log('[API] Processing bill payment:', { amount: paymentAmount, bills: bills.length });
+
+      // Create the bill payment transaction
+      const result = await sql`
+        INSERT INTO transactions (type, reference, date, contact_id, amount, balance, currency, status, memo)
+        VALUES ('bill_payment', ${data.reference}, ${data.date}, ${data.vendorId || data.contactId}, ${paymentAmount}, 0, ${data.currency || 'CAD'}, 'completed', ${data.memo || 'Bill payment'})
+        RETURNING id
+      `;
+
+      const paymentId = result[0].id;
+      const paymentDate = data.date;
+
+      // Helper to get or create account
+      const getOrCreateAccount = async (code: string, name: string, type: string, description: string) => {
+        let account = await sql`SELECT id, type FROM accounts WHERE code = ${code} LIMIT 1`;
+        if (account.length > 0) {
+          if (account[0].type !== type) {
+            await sql`UPDATE accounts SET type = ${type} WHERE id = ${account[0].id}`;
+          }
+          return account[0];
+        }
+        const newAccount = await sql`
+          INSERT INTO accounts (code, name, type, description, balance, currency, is_active)
+          VALUES (${code}, ${name}, ${type}, ${description}, 0, 'CAD', true)
+          RETURNING id, type
+        `;
+        return newAccount[0];
+      };
+
+      // Get required accounts
+      const bankAccount = data.bankAccountId
+        ? (await sql`SELECT id, type FROM accounts WHERE id = ${data.bankAccountId} LIMIT 1`)[0]
+        : await getOrCreateAccount('1000', 'Cash', 'bank', 'Cash on hand');
+      const apAccount = await getOrCreateAccount('2000', 'Accounts Payable', 'accounts_payable', 'Money owed to vendors');
+
+      // Debit AP (decrease liability)
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${apAccount.id}, ${paymentId}, ${`Bill payment ${data.reference || ''}`}, ${paymentAmount}, 0, ${paymentDate})
+      `;
+
+      // Credit bank (decrease cash)
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${bankAccount.id}, ${paymentId}, ${`Bill payment ${data.reference || ''}`}, 0, ${paymentAmount}, ${paymentDate})
+      `;
+
+      // Process each bill
+      for (const bill of bills) {
+        if (!bill.billId && !bill.transactionId) continue;
+        const billId = bill.billId || bill.transactionId;
+        const appliedAmount = Number(bill.amount) || 0;
+
+        // Get the bill
+        const billTx = await sql`SELECT id, reference, balance, amount FROM transactions WHERE id = ${billId} LIMIT 1`;
+        if (billTx.length === 0) continue;
+
+        // Update bill balance and status
+        const currentBalance = Number(billTx[0].balance) || Number(billTx[0].amount);
+        const newBalance = Math.max(0, currentBalance - appliedAmount);
+        const newStatus = newBalance <= 0 ? 'paid' : 'partial';
+
+        await sql`UPDATE transactions SET balance = ${newBalance}, status = ${newStatus} WHERE id = ${billId}`;
+
+        // Record payment application
+        await sql`
+          INSERT INTO payment_applications (payment_id, invoice_id, amount_applied)
+          VALUES (${paymentId}, ${billId}, ${appliedAmount})
+        `;
+
+        console.log(`[API] Applied ${appliedAmount} to bill ${billTx[0].reference}, new balance: ${newBalance}`);
+      }
+
+      // Update account balances
+      // AP (liability) - debits decrease
+      await sql`UPDATE accounts SET balance = balance - ${paymentAmount} WHERE id = ${apAccount.id}`;
+      // Bank (asset) - credits decrease
+      await sql`UPDATE accounts SET balance = balance - ${paymentAmount} WHERE id = ${bankAccount.id}`;
+
+      console.log('[API] Bill payment created:', paymentId);
+      return res.status(201).json({ id: paymentId, success: true });
+    }
+
+    // Create expense
+    if ((path === '/api/expenses' || path.endsWith('/expenses')) && req.method === 'POST') {
+      const data = req.body;
+      const lineItems = data.lineItems || [];
+
+      // Calculate amounts
+      const subTotal = Number(data.subTotal) || lineItems.reduce((sum: number, item: any) => sum + Number(item.amount || 0), 0);
+      const taxAmount = Number(data.taxAmount) || 0;
+      const totalAmount = Number(data.totalAmount) || (subTotal + taxAmount);
+
+      console.log('[API] Creating expense:', { totalAmount, subTotal, taxAmount });
+
+      // Create the expense transaction
+      const result = await sql`
+        INSERT INTO transactions (type, reference, date, contact_id, amount, balance, currency, status, memo, sub_total, tax_amount)
+        VALUES ('expense', ${data.reference}, ${data.date}, ${data.contactId || null}, ${totalAmount}, 0, ${data.currency || 'CAD'}, 'completed', ${data.description || data.memo || ''}, ${subTotal}, ${taxAmount})
+        RETURNING id
+      `;
+
+      const transactionId = result[0].id;
+      const expenseDate = data.date;
+      const expenseRef = data.reference || `EXP-${transactionId}`;
+
+      // Insert line items
+      for (const item of lineItems) {
+        await sql`
+          INSERT INTO line_items (transaction_id, description, quantity, unit_price, amount, account_id, sales_tax_id)
+          VALUES (${transactionId}, ${item.description}, 1, ${item.amount || 0}, ${item.amount || 0}, ${item.accountId || null}, ${item.salesTaxId || null})
+        `;
+      }
+
+      // Helper to get or create account
+      const getOrCreateAccount = async (code: string, name: string, type: string, description: string) => {
+        let account = await sql`SELECT id, type FROM accounts WHERE code = ${code} LIMIT 1`;
+        if (account.length > 0) {
+          if (account[0].type !== type) {
+            await sql`UPDATE accounts SET type = ${type} WHERE id = ${account[0].id}`;
+          }
+          return account[0];
+        }
+        const newAccount = await sql`
+          INSERT INTO accounts (code, name, type, description, balance, currency, is_active)
+          VALUES (${code}, ${name}, ${type}, ${description}, 0, 'CAD', true)
+          RETURNING id, type
+        `;
+        return newAccount[0];
+      };
+
+      // Get payment account
+      const paymentAccount = data.paymentAccountId
+        ? (await sql`SELECT id, type FROM accounts WHERE id = ${data.paymentAccountId} LIMIT 1`)[0]
+        : await getOrCreateAccount('1000', 'Cash', 'bank', 'Cash on hand');
+
+      // Get tax account
+      const taxPayableAccount = await getOrCreateAccount('2100', 'Sales Tax Payable', 'other_current_liability', 'Tax collected on sales');
+
+      // Create ledger entries for each line item (debit expense accounts)
+      for (const item of lineItems) {
+        if (item.accountId) {
+          const expAccount = await sql`SELECT id, type FROM accounts WHERE id = ${item.accountId} LIMIT 1`;
+          if (expAccount.length > 0) {
+            await sql`
+              INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+              VALUES (${item.accountId}, ${transactionId}, ${item.description || `Expense ${expenseRef}`}, ${item.amount || 0}, 0, ${expenseDate})
+            `;
+            // Update expense account balance (debit increases expense)
+            await sql`UPDATE accounts SET balance = balance + ${item.amount || 0} WHERE id = ${item.accountId}`;
+          }
+        }
+      }
+
+      // Debit tax payable for input tax credit (reduces liability)
+      if (taxAmount > 0) {
+        await sql`
+          INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+          VALUES (${taxPayableAccount.id}, ${transactionId}, ${`Expense ${expenseRef} - Tax`}, ${taxAmount}, 0, ${expenseDate})
+        `;
+        await sql`UPDATE accounts SET balance = balance - ${taxAmount} WHERE id = ${taxPayableAccount.id}`;
+      }
+
+      // Credit payment account (decrease cash/bank)
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${paymentAccount.id}, ${transactionId}, ${`Expense ${expenseRef}`}, 0, ${totalAmount}, ${expenseDate})
+      `;
+      await sql`UPDATE accounts SET balance = balance - ${totalAmount} WHERE id = ${paymentAccount.id}`;
+
+      console.log('[API] Expense created:', transactionId);
+      return res.status(201).json({ id: transactionId, success: true });
+    }
+
+    // Create deposit
+    if ((path === '/api/deposits' || path.endsWith('/deposits')) && req.method === 'POST') {
+      const data = req.body;
+      const depositAmount = Number(data.amount) || 0;
+
+      console.log('[API] Creating deposit:', { amount: depositAmount });
+
+      // Determine status based on whether it's a customer deposit
+      const status = data.contactId ? 'unapplied_credit' : 'completed';
+      const balance = data.contactId ? -depositAmount : 0; // Negative balance for customer credits
+
+      // Create the deposit transaction
+      const result = await sql`
+        INSERT INTO transactions (type, reference, date, contact_id, amount, balance, currency, status, memo)
+        VALUES ('deposit', ${data.reference}, ${data.date}, ${data.contactId || null}, ${depositAmount}, ${balance}, ${data.currency || 'CAD'}, ${status}, ${data.description || ''})
+        RETURNING id
+      `;
+
+      const transactionId = result[0].id;
+      const depositDate = data.date;
+      const depositRef = data.reference || `DEP-${transactionId}`;
+
+      // Helper to get or create account
+      const getOrCreateAccount = async (code: string, name: string, type: string, description: string) => {
+        let account = await sql`SELECT id, type FROM accounts WHERE code = ${code} LIMIT 1`;
+        if (account.length > 0) {
+          if (account[0].type !== type) {
+            await sql`UPDATE accounts SET type = ${type} WHERE id = ${account[0].id}`;
+          }
+          return account[0];
+        }
+        const newAccount = await sql`
+          INSERT INTO accounts (code, name, type, description, balance, currency, is_active)
+          VALUES (${code}, ${name}, ${type}, ${description}, 0, 'CAD', true)
+          RETURNING id, type
+        `;
+        return newAccount[0];
+      };
+
+      // Get accounts
+      const bankAccount = data.depositAccountId
+        ? (await sql`SELECT id, type FROM accounts WHERE id = ${data.depositAccountId} LIMIT 1`)[0]
+        : await getOrCreateAccount('1000', 'Cash', 'bank', 'Cash on hand');
+
+      const sourceAccount = data.sourceAccountId
+        ? (await sql`SELECT id, type FROM accounts WHERE id = ${data.sourceAccountId} LIMIT 1`)[0]
+        : (data.contactId
+            ? await getOrCreateAccount('1100', 'Accounts Receivable', 'accounts_receivable', 'Money owed by customers')
+            : await getOrCreateAccount('4100', 'Other Income', 'other_income', 'Other income'));
+
+      // Create ledger entries
+      // Debit bank account (increase cash)
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${bankAccount.id}, ${transactionId}, ${`Deposit ${depositRef}`}, ${depositAmount}, 0, ${depositDate})
+      `;
+
+      // Credit source account
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${sourceAccount.id}, ${transactionId}, ${`Deposit ${depositRef}`}, 0, ${depositAmount}, ${depositDate})
+      `;
+
+      // Update account balances
+      await sql`UPDATE accounts SET balance = balance + ${depositAmount} WHERE id = ${bankAccount.id}`;
+
+      // Source account balance update depends on type
+      const sourceType = sourceAccount.type;
+      if (sourceType === 'accounts_receivable') {
+        // AR is asset - credits decrease
+        await sql`UPDATE accounts SET balance = balance - ${depositAmount} WHERE id = ${sourceAccount.id}`;
+      } else {
+        // Income accounts - credits increase
+        await sql`UPDATE accounts SET balance = balance + ${depositAmount} WHERE id = ${sourceAccount.id}`;
+      }
+
+      console.log('[API] Deposit created:', transactionId);
+      return res.status(201).json({ id: transactionId, success: true });
+    }
+
+    // Create journal entry
+    if ((path === '/api/journal-entries' || path.endsWith('/journal-entries')) && req.method === 'POST') {
+      const data = req.body;
+      const entries = data.entries || [];
+
+      // Calculate totals
+      const totalDebits = entries.reduce((sum: number, e: any) => sum + (Number(e.debit) || 0), 0);
+      const totalCredits = entries.reduce((sum: number, e: any) => sum + (Number(e.credit) || 0), 0);
+
+      console.log('[API] Creating journal entry:', { totalDebits, totalCredits, entries: entries.length });
+
+      // Validate debits = credits
+      if (Math.abs(totalDebits - totalCredits) >= 0.01) {
+        return res.status(400).json({ message: 'Total debits must equal total credits' });
+      }
+
+      // Create the journal entry transaction
+      const result = await sql`
+        INSERT INTO transactions (type, reference, date, contact_id, amount, balance, currency, status, memo)
+        VALUES ('journal_entry', ${data.reference}, ${data.date}, ${data.contactId || null}, ${totalDebits}, 0, ${data.currency || 'CAD'}, 'completed', ${data.description || ''})
+        RETURNING id
+      `;
+
+      const transactionId = result[0].id;
+      const entryDate = data.date;
+
+      // Create ledger entries and update balances
+      for (const entry of entries) {
+        if (!entry.accountId) continue;
+
+        const debit = Number(entry.debit) || 0;
+        const credit = Number(entry.credit) || 0;
+
+        // Insert ledger entry
+        await sql`
+          INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+          VALUES (${entry.accountId}, ${transactionId}, ${entry.description || data.description || ''}, ${debit}, ${credit}, ${entryDate})
+        `;
+
+        // Get account type to determine balance update
+        const account = await sql`SELECT id, type FROM accounts WHERE id = ${entry.accountId} LIMIT 1`;
+        if (account.length > 0) {
+          const accountType = account[0].type;
+          let balanceChange = 0;
+
+          // Debit-normal accounts: assets, expenses
+          if (['bank', 'accounts_receivable', 'current_assets', 'fixed_asset', 'other_current_asset', 'expenses', 'cost_of_goods_sold', 'other_expense'].includes(accountType)) {
+            balanceChange = debit - credit;
+          } else {
+            // Credit-normal accounts: liabilities, equity, income
+            balanceChange = credit - debit;
+          }
+
+          if (balanceChange !== 0) {
+            await sql`UPDATE accounts SET balance = balance + ${balanceChange} WHERE id = ${entry.accountId}`;
+          }
+        }
+      }
+
+      console.log('[API] Journal entry created:', transactionId);
+      return res.status(201).json({ id: transactionId, success: true });
+    }
+
+    // Create transfer (between accounts)
+    if ((path === '/api/transfers' || path.endsWith('/transfers')) && req.method === 'POST') {
+      const { fromAccountId, toAccountId, amount, date, memo, reference } = req.body;
+      const transferAmount = Number(amount) || 0;
+
+      console.log('[API] Creating transfer:', { from: fromAccountId, to: toAccountId, amount: transferAmount });
+
+      if (!fromAccountId || !toAccountId || !transferAmount) {
+        return res.status(400).json({ message: 'fromAccountId, toAccountId, and amount are required' });
+      }
+
+      if (fromAccountId === toAccountId) {
+        return res.status(400).json({ message: 'From and To accounts must be different' });
+      }
+
+      // Get accounts
+      const fromAccount = await sql`SELECT id, name, type FROM accounts WHERE id = ${fromAccountId} LIMIT 1`;
+      const toAccount = await sql`SELECT id, name, type FROM accounts WHERE id = ${toAccountId} LIMIT 1`;
+
+      if (fromAccount.length === 0 || toAccount.length === 0) {
+        return res.status(400).json({ message: 'One or both accounts not found' });
+      }
+
+      // Create the transfer transaction
+      const result = await sql`
+        INSERT INTO transactions (type, reference, date, amount, balance, currency, status, memo)
+        VALUES ('transfer', ${reference || null}, ${date}, ${transferAmount}, 0, 'CAD', 'completed', ${memo || `Transfer from ${fromAccount[0].name} to ${toAccount[0].name}`})
+        RETURNING id
+      `;
+
+      const transactionId = result[0].id;
+
+      // Create ledger entries
+      // Debit to account (increase)
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${toAccountId}, ${transactionId}, ${`Transfer from ${fromAccount[0].name}`}, ${transferAmount}, 0, ${date})
+      `;
+
+      // Credit from account (decrease)
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${fromAccountId}, ${transactionId}, ${`Transfer to ${toAccount[0].name}`}, 0, ${transferAmount}, ${date})
+      `;
+
+      // Update account balances based on account types
+      // For asset accounts (bank): debit increases, credit decreases
+      const fromType = fromAccount[0].type;
+      const toType = toAccount[0].type;
+
+      // Update from account (credit)
+      if (['bank', 'accounts_receivable', 'current_assets', 'fixed_asset', 'other_current_asset'].includes(fromType)) {
+        await sql`UPDATE accounts SET balance = balance - ${transferAmount} WHERE id = ${fromAccountId}`;
+      } else {
+        await sql`UPDATE accounts SET balance = balance + ${transferAmount} WHERE id = ${fromAccountId}`;
+      }
+
+      // Update to account (debit)
+      if (['bank', 'accounts_receivable', 'current_assets', 'fixed_asset', 'other_current_asset'].includes(toType)) {
+        await sql`UPDATE accounts SET balance = balance + ${transferAmount} WHERE id = ${toAccountId}`;
+      } else {
+        await sql`UPDATE accounts SET balance = balance - ${transferAmount} WHERE id = ${toAccountId}`;
+      }
+
+      console.log('[API] Transfer created:', transactionId);
+      return res.status(201).json({ id: transactionId, success: true });
+    }
+
+    // Create sales receipt (cash sale - immediate payment)
+    if ((path === '/api/sales-receipts' || path.endsWith('/sales-receipts')) && req.method === 'POST') {
+      const data = req.body;
+      const lineItems = data.lineItems || [];
+
+      const subTotal = Number(data.subTotal) || lineItems.reduce((sum: number, item: any) => sum + Number(item.amount || 0), 0);
+      const taxAmount = Number(data.taxAmount) || 0;
+      const totalAmount = Number(data.totalAmount) || (subTotal + taxAmount);
+
+      console.log('[API] Creating sales receipt:', { totalAmount, subTotal, taxAmount });
+
+      // Create the sales receipt transaction
+      const result = await sql`
+        INSERT INTO transactions (type, reference, date, contact_id, amount, balance, currency, status, memo, sub_total, tax_amount)
+        VALUES ('sales_receipt', ${data.reference}, ${data.date}, ${data.contactId || null}, ${totalAmount}, 0, ${data.currency || 'CAD'}, 'completed', ${data.memo || ''}, ${subTotal}, ${taxAmount})
+        RETURNING id
+      `;
+
+      const transactionId = result[0].id;
+      const receiptDate = data.date;
+      const receiptRef = data.reference || `SR-${transactionId}`;
+
+      // Insert line items
+      for (const item of lineItems) {
+        await sql`
+          INSERT INTO line_items (transaction_id, description, quantity, unit_price, amount, sales_tax_id, product_id)
+          VALUES (${transactionId}, ${item.description}, ${item.quantity || 1}, ${item.unitPrice || 0}, ${item.amount || 0}, ${item.salesTaxId || null}, ${item.productId || null})
+        `;
+      }
+
+      // Helper to get or create account
+      const getOrCreateAccount = async (code: string, name: string, type: string, description: string) => {
+        let account = await sql`SELECT id, type FROM accounts WHERE code = ${code} LIMIT 1`;
+        if (account.length > 0) {
+          if (account[0].type !== type) {
+            await sql`UPDATE accounts SET type = ${type} WHERE id = ${account[0].id}`;
+          }
+          return account[0];
+        }
+        const newAccount = await sql`
+          INSERT INTO accounts (code, name, type, description, balance, currency, is_active)
+          VALUES (${code}, ${name}, ${type}, ${description}, 0, 'CAD', true)
+          RETURNING id, type
+        `;
+        return newAccount[0];
+      };
+
+      // Get accounts
+      const bankAccount = data.depositAccountId
+        ? (await sql`SELECT id FROM accounts WHERE id = ${data.depositAccountId} LIMIT 1`)[0]
+        : await getOrCreateAccount('1000', 'Cash', 'bank', 'Cash on hand');
+      const revenueAccount = await getOrCreateAccount('4000', 'Service Revenue', 'income', 'Revenue from services');
+      const taxPayableAccount = await getOrCreateAccount('2100', 'Sales Tax Payable', 'other_current_liability', 'Tax collected');
+
+      // Create ledger entries
+      // Debit bank (increase cash)
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${bankAccount.id}, ${transactionId}, ${`Sales Receipt ${receiptRef}`}, ${totalAmount}, 0, ${receiptDate})
+      `;
+
+      // Credit revenue (increase income)
+      await sql`
+        INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+        VALUES (${revenueAccount.id}, ${transactionId}, ${`Sales Receipt ${receiptRef} - Revenue`}, 0, ${subTotal}, ${receiptDate})
+      `;
+
+      // Credit tax payable (if any)
+      if (taxAmount > 0) {
+        await sql`
+          INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+          VALUES (${taxPayableAccount.id}, ${transactionId}, ${`Sales Receipt ${receiptRef} - Tax`}, 0, ${taxAmount}, ${receiptDate})
+        `;
+      }
+
+      // Update account balances
+      await sql`UPDATE accounts SET balance = balance + ${totalAmount} WHERE id = ${bankAccount.id}`;
+      await sql`UPDATE accounts SET balance = balance + ${subTotal} WHERE id = ${revenueAccount.id}`;
+      if (taxAmount > 0) {
+        await sql`UPDATE accounts SET balance = balance + ${taxAmount} WHERE id = ${taxPayableAccount.id}`;
+      }
+
+      console.log('[API] Sales receipt created:', transactionId);
+      return res.status(201).json({ id: transactionId, success: true });
     }
 
     // Create contact
