@@ -1472,8 +1472,8 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                       </div>
                     </div>
                     
-                    {/* Show tax components breakdown if available (read-only, for info) */}
-                    {form.taxComponentsInfo && form.taxComponentsInfo.length > 0 && manualTaxAmount === null && (
+                    {/* Show tax components breakdown only for composite taxes with multiple components */}
+                    {form.taxComponentsInfo && form.taxComponentsInfo.length > 1 && manualTaxAmount === null && (
                       <div className="pl-4 space-y-1">
                         {form.taxComponentsInfo.map((taxComponent: TaxComponentInfo) => (
                           <div key={taxComponent.id} className="flex justify-between items-center text-gray-600 text-xs">
