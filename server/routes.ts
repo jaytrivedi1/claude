@@ -1851,23 +1851,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
         paymentTermsType: typeof invoiceData.paymentTerms
       });
       
-      // Calculate amount from line items or use provided total amount with rounding
-      const lineItemsTotal = invoiceData.lineItems.reduce((sum, item) => sum + (item.amount || 0), 0);
-      let totalAmount = roundTo2Decimals(invoiceData.totalAmount || lineItemsTotal);
+      // ALWAYS calculate subtotal from line items (never trust frontend value for this)
+      const lineItemsTotal = invoiceData.lineItems.reduce((sum, item) => {
+        const itemAmount = Number(item.amount) || (Number(item.quantity) * Number(item.unitPrice)) || 0;
+        return sum + itemAmount;
+      }, 0);
 
-      // Ensure totalAmount is a valid number (not NaN or undefined)
-      if (!Number.isFinite(totalAmount) || totalAmount < 0) {
-        console.error('Invalid totalAmount detected:', { totalAmount, invoiceDataTotalAmount: invoiceData.totalAmount, lineItemsTotal });
-        totalAmount = lineItemsTotal > 0 ? lineItemsTotal : 0;
-      }
-
-      // Use the provided subtotal and tax amount from the client with rounding
-      let subTotal = roundTo2Decimals(invoiceData.subTotal || totalAmount);
-      let taxAmount = roundTo2Decimals(invoiceData.taxAmount || 0);
-
-      // Ensure subTotal and taxAmount are valid numbers
-      if (!Number.isFinite(subTotal)) subTotal = totalAmount;
+      // Use provided tax amount or default to 0
+      let taxAmount = Number(invoiceData.taxAmount) || 0;
       if (!Number.isFinite(taxAmount)) taxAmount = 0;
+
+      // Subtotal is the line items total
+      let subTotal = roundTo2Decimals(lineItemsTotal);
+      if (!Number.isFinite(subTotal)) subTotal = 0;
+
+      // Total is ALWAYS subtotal + tax (calculated server-side)
+      let totalAmount = roundTo2Decimals(subTotal + taxAmount);
+
+      console.log('[Invoice] Server-side calculation:', {
+        lineItemsTotal,
+        subTotal,
+        taxAmount,
+        totalAmount,
+        providedTotalAmount: invoiceData.totalAmount
+      });
       
       // Get home currency from preferences
       const preferences = await storage.getPreferences();
