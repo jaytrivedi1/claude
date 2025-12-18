@@ -1436,10 +1436,49 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                     Add subtotal
                   </Button>
                 </div>
-                
-                {/* Totals */}
-                <div className="flex justify-end mt-6">
-                  <div className="w-80 space-y-3 bg-muted/30 p-5 rounded-xl border border-border">
+
+                {/* Message/Attachments + Totals - Side by side layout */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+                  {/* Left: Message & Attachments stacked */}
+                  <div className="space-y-4">
+                    {/* Message on Invoice */}
+                    <div>
+                      <FormLabel className="text-sm font-medium block mb-2">Message on Invoice</FormLabel>
+                      <Textarea
+                        className="min-h-[70px] bg-background border-border resize-none text-sm"
+                        placeholder="Add a personal note or message for this invoice"
+                      />
+                    </div>
+
+                    {/* Attachments */}
+                    <div>
+                      <FormLabel className="text-sm font-medium block mb-2">Attachments</FormLabel>
+                      <div className="border-2 border-dashed border-border rounded-lg p-3 text-center hover:border-primary/50 hover:bg-primary/5 transition-colors cursor-pointer">
+                        <div className="flex items-center justify-center gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => document.getElementById('file-upload-invoice')?.click()}
+                          >
+                            Select files
+                          </Button>
+                          <span className="text-xs text-muted-foreground">or drag & drop</span>
+                        </div>
+                        <input
+                          type="file"
+                          id="file-upload-invoice"
+                          className="hidden"
+                          multiple
+                          onChange={(e) => console.log("Files selected:", e.target.files)}
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">PDF, Word, Excel, images</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right: Totals */}
+                  <div className="space-y-3 bg-muted/30 p-5 rounded-xl border border-border">
                     <div className="flex justify-between items-center text-foreground">
                       <span className="text-sm font-medium">Subtotal</span>
                       <span className="font-semibold">${formatCurrency(subTotal)}</span>
@@ -1549,44 +1588,6 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                   </div>
                 </div>
               </div>
-              
-              {/* Bottom Section: Message & Attachments side by side */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {/* Message on Invoice */}
-              <div className="bg-card rounded-xl border border-border shadow-sm p-4">
-                <FormLabel className="text-sm font-medium block mb-2">Message on Invoice</FormLabel>
-                <Textarea
-                  className="min-h-[80px] bg-background border-border resize-none text-sm"
-                  placeholder="Add a personal note or message for this invoice"
-                />
-              </div>
-
-              {/* Attachments */}
-              <div className="bg-card rounded-xl border border-border shadow-sm p-4">
-                <FormLabel className="text-sm font-medium block mb-2">Attachments</FormLabel>
-                <div className="border-2 border-dashed border-border rounded-lg p-4 text-center hover:border-primary/50 hover:bg-primary/5 transition-colors cursor-pointer">
-                  <div className="flex items-center justify-center gap-3">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => document.getElementById('file-upload-invoice')?.click()}
-                    >
-                      Select files
-                    </Button>
-                    <span className="text-xs text-muted-foreground">or drag and drop</span>
-                  </div>
-                  <input
-                    type="file"
-                    id="file-upload-invoice"
-                    className="hidden"
-                    multiple
-                    onChange={(e) => console.log("Files selected:", e.target.files)}
-                  />
-                  <p className="text-xs text-muted-foreground mt-2">PDF, Word, Excel, images</p>
-                </div>
-              </div>
-            </div>
 
             {/* Available Credits (compact, shown only if credits exist) */}
             {(unappliedCredits.length > 0 || appliedCredits.length > 0) && (
