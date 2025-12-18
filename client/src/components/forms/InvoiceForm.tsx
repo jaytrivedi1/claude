@@ -1039,8 +1039,8 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div>
                     <FormLabel className="text-sm font-medium block mb-2">Billing address</FormLabel>
-                    <Textarea 
-                      className="min-h-[120px] bg-white border-gray-300 resize-none" 
+                    <Textarea
+                      className="min-h-[120px] bg-background border-border resize-none"
                       value={selectedContact?.address || ''}
                       readOnly
                     />
@@ -1049,33 +1049,8 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                   <div className="space-y-4">
                     <div>
                       <div className="flex items-center gap-1 mb-2">
-                        <FormLabel className="text-sm font-medium">Type</FormLabel>
-                        <HelpCircle className="h-4 w-4 text-gray-400" />
-                      </div>
-                      <FormItem>
-                        <FormControl>
-                          <Select 
-                            value={documentType} 
-                            onValueChange={(value: 'invoice' | 'quotation') => setDocumentType(value)}
-                            disabled={isEditing}
-                            data-testid="select-document-type"
-                          >
-                            <SelectTrigger className="bg-white border-gray-300 h-10">
-                              <SelectValue placeholder="Select type" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="invoice">Invoice</SelectItem>
-                              <SelectItem value="quotation">Quotation</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </FormControl>
-                      </FormItem>
-                    </div>
-                    
-                    <div>
-                      <div className="flex items-center gap-1 mb-2">
                         <FormLabel className="text-sm font-medium">Terms</FormLabel>
-                        <HelpCircle className="h-4 w-4 text-gray-400" />
+                        <HelpCircle className="h-4 w-4 text-muted-foreground" />
                       </div>
                       <FormItem>
                         <FormControl>
@@ -1083,7 +1058,7 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                             value={paymentTerms} 
                             onValueChange={(value) => handlePaymentTermsChange(value as PaymentTerms)}
                           >
-                            <SelectTrigger className="bg-white border-gray-300 h-10">
+                            <SelectTrigger className="bg-background border-border h-10">
                               <SelectValue placeholder="Select payment terms" />
                             </SelectTrigger>
                             <SelectContent>
@@ -1104,7 +1079,7 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                         <div>
                           <div className="flex items-center gap-1 mb-2">
                             <FormLabel className="text-sm font-medium">Currency</FormLabel>
-                            <HelpCircle className="h-4 w-4 text-gray-400" />
+                            <HelpCircle className="h-4 w-4 text-muted-foreground" />
                           </div>
                           <FormItem>
                             <FormControl>
@@ -1113,7 +1088,7 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                                 onValueChange={(value) => setCurrency(value)}
                                 disabled={isEditing || !!watchContactId}
                               >
-                                <SelectTrigger className="bg-white border-gray-300 h-10">
+                                <SelectTrigger className="bg-background border-border h-10">
                                   <SelectValue placeholder="Select currency" />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -1154,7 +1129,7 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                               <PopoverTrigger asChild>
                                 <FormControl>
                                   <Input
-                                    className="bg-white border-gray-300 h-10"
+                                    className="bg-background border-border h-10 text-left"
                                     value={field.value ? format(field.value, "dd/MM/yyyy") : ""}
                                     readOnly
                                   />
@@ -1180,7 +1155,7 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                       <Popover>
                         <PopoverTrigger asChild>
                           <Input
-                            className="bg-white border-gray-300 h-10"
+                            className="bg-background border-border h-10 text-left"
                             value={format(dueDate, "dd/MM/yyyy")}
                             readOnly
                           />
