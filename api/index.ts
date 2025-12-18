@@ -1135,10 +1135,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const invoiceRef = data.reference || `INV-${transactionId}`;
       const invoiceDate = data.date;
 
-      // Get required accounts
-      const arAccount = await sql`SELECT id FROM accounts WHERE code = '1100' LIMIT 1`;
-      const revenueAccount = await sql`SELECT id FROM accounts WHERE code = '4000' LIMIT 1`;
-      const taxPayableAccount = await sql`SELECT id FROM accounts WHERE code = '2100' LIMIT 1`;
+      // Get required accounts (try multiple codes, create if missing)
+      let arAccount = await sql`SELECT id FROM accounts WHERE code IN ('1100', '1200') AND type IN ('accounts_receivable', 'asset') LIMIT 1`;
+      let revenueAccount = await sql`SELECT id FROM accounts WHERE code = '4000' AND type = 'income' LIMIT 1`;
+      let taxPayableAccount = await sql`SELECT id FROM accounts WHERE code IN ('2100', '2200') AND type IN ('other_current_liability', 'liability') LIMIT 1`;
+
+      // Create Accounts Receivable if missing
+      if (arAccount.length === 0) {
+        const newAR = await sql`
+          INSERT INTO accounts (code, name, type, description, balance, currency, is_active)
+          VALUES ('1100', 'Accounts Receivable', 'accounts_receivable', 'Money owed by customers', 0, 'CAD', true)
+          RETURNING id
+        `;
+        arAccount = newAR;
+        console.log('[API] Created Accounts Receivable account');
+      }
+
+      // Create Service Revenue if missing
+      if (revenueAccount.length === 0) {
+        const newRevenue = await sql`
+          INSERT INTO accounts (code, name, type, description, balance, currency, is_active)
+          VALUES ('4000', 'Service Revenue', 'income', 'Revenue from services', 0, 'CAD', true)
+          RETURNING id
+        `;
+        revenueAccount = newRevenue;
+        console.log('[API] Created Service Revenue account');
+      }
+
+      // Create Sales Tax Payable if missing
+      if (taxPayableAccount.length === 0) {
+        const newTax = await sql`
+          INSERT INTO accounts (code, name, type, description, balance, currency, is_active)
+          VALUES ('2100', 'Sales Tax Payable', 'other_current_liability', 'Tax collected on sales', 0, 'CAD', true)
+          RETURNING id
+        `;
+        taxPayableAccount = newTax;
+        console.log('[API] Created Sales Tax Payable account');
+      }
 
       if (arAccount.length > 0 && revenueAccount.length > 0) {
         // Debit Accounts Receivable for total amount
