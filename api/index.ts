@@ -490,82 +490,191 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Income Statement report
     if ((path === '/api/reports/income-statement' || path.endsWith('/income-statement')) && req.method === 'GET') {
-      // Get all income accounts (income, other_income)
-      const income = await sql`
-        SELECT a.id, a.name, a.code, a.type, COALESCE(SUM(le.credit - le.debit), 0) as total
+      // Get revenue accounts (type = 'income')
+      const revenueAccounts = await sql`
+        SELECT a.id, a.name, a.code, a.type, COALESCE(SUM(le.credit - le.debit), 0) as balance
         FROM accounts a
         LEFT JOIN ledger_entries le ON a.id = le.account_id
-        WHERE a.type IN ('income', 'other_income')
+        WHERE a.type = 'income'
         AND a.is_active = true
         GROUP BY a.id, a.name, a.code, a.type
         HAVING COALESCE(SUM(le.credit - le.debit), 0) != 0
         ORDER BY a.code
       `;
-      // Get all expense accounts (expenses, cost_of_goods_sold, other_expense)
-      const expenses = await sql`
-        SELECT a.id, a.name, a.code, a.type, COALESCE(SUM(le.debit - le.credit), 0) as total
+      // Get COGS accounts
+      const cogsAccounts = await sql`
+        SELECT a.id, a.name, a.code, a.type, COALESCE(SUM(le.debit - le.credit), 0) as balance
         FROM accounts a
         LEFT JOIN ledger_entries le ON a.id = le.account_id
-        WHERE a.type IN ('expenses', 'cost_of_goods_sold', 'other_expense')
+        WHERE a.type = 'cost_of_goods_sold'
         AND a.is_active = true
         GROUP BY a.id, a.name, a.code, a.type
         HAVING COALESCE(SUM(le.debit - le.credit), 0) != 0
         ORDER BY a.code
       `;
-      const totalIncome = income.reduce((sum: number, i: any) => sum + Number(i.total), 0);
-      const totalExpenses = expenses.reduce((sum: number, e: any) => sum + Number(e.total), 0);
+      // Get operating expense accounts
+      const expenseAccounts = await sql`
+        SELECT a.id, a.name, a.code, a.type, COALESCE(SUM(le.debit - le.credit), 0) as balance
+        FROM accounts a
+        LEFT JOIN ledger_entries le ON a.id = le.account_id
+        WHERE a.type = 'expenses'
+        AND a.is_active = true
+        GROUP BY a.id, a.name, a.code, a.type
+        HAVING COALESCE(SUM(le.debit - le.credit), 0) != 0
+        ORDER BY a.code
+      `;
+      // Get other income accounts
+      const otherIncomeAccounts = await sql`
+        SELECT a.id, a.name, a.code, a.type, COALESCE(SUM(le.credit - le.debit), 0) as balance
+        FROM accounts a
+        LEFT JOIN ledger_entries le ON a.id = le.account_id
+        WHERE a.type = 'other_income'
+        AND a.is_active = true
+        GROUP BY a.id, a.name, a.code, a.type
+        HAVING COALESCE(SUM(le.credit - le.debit), 0) != 0
+        ORDER BY a.code
+      `;
+      // Get other expense accounts
+      const otherExpenseAccounts = await sql`
+        SELECT a.id, a.name, a.code, a.type, COALESCE(SUM(le.debit - le.credit), 0) as balance
+        FROM accounts a
+        LEFT JOIN ledger_entries le ON a.id = le.account_id
+        WHERE a.type = 'other_expense'
+        AND a.is_active = true
+        GROUP BY a.id, a.name, a.code, a.type
+        HAVING COALESCE(SUM(le.debit - le.credit), 0) != 0
+        ORDER BY a.code
+      `;
+
+      const totalRevenue = revenueAccounts.reduce((sum: number, a: any) => sum + Number(a.balance), 0);
+      const totalCOGS = cogsAccounts.reduce((sum: number, a: any) => sum + Number(a.balance), 0);
+      const totalExpenses = expenseAccounts.reduce((sum: number, a: any) => sum + Number(a.balance), 0);
+      const totalOtherIncome = otherIncomeAccounts.reduce((sum: number, a: any) => sum + Number(a.balance), 0);
+      const totalOtherExpense = otherExpenseAccounts.reduce((sum: number, a: any) => sum + Number(a.balance), 0);
+
+      const grossProfit = totalRevenue - totalCOGS;
+      const operatingIncome = grossProfit - totalExpenses;
+      const netIncome = operatingIncome + totalOtherIncome - totalOtherExpense;
+
       return res.status(200).json({
-        income: transformKeys(income),
-        expenses: transformKeys(expenses),
-        totalIncome,
-        totalExpenses,
-        netIncome: totalIncome - totalExpenses
+        revenue: {
+          accounts: revenueAccounts.map((a: any) => ({ id: a.id, code: a.code, name: a.name, balance: Math.round(Number(a.balance) * 100) / 100 })),
+          total: Math.round(totalRevenue * 100) / 100
+        },
+        costOfGoodsSold: {
+          accounts: cogsAccounts.map((a: any) => ({ id: a.id, code: a.code, name: a.name, balance: Math.round(Number(a.balance) * 100) / 100 })),
+          total: Math.round(totalCOGS * 100) / 100
+        },
+        grossProfit: Math.round(grossProfit * 100) / 100,
+        operatingExpenses: {
+          accounts: expenseAccounts.map((a: any) => ({ id: a.id, code: a.code, name: a.name, balance: Math.round(Number(a.balance) * 100) / 100 })),
+          total: Math.round(totalExpenses * 100) / 100
+        },
+        operatingIncome: Math.round(operatingIncome * 100) / 100,
+        otherIncome: {
+          accounts: otherIncomeAccounts.map((a: any) => ({ id: a.id, code: a.code, name: a.name, balance: Math.round(Number(a.balance) * 100) / 100 })),
+          total: Math.round(totalOtherIncome * 100) / 100
+        },
+        otherExpense: {
+          accounts: otherExpenseAccounts.map((a: any) => ({ id: a.id, code: a.code, name: a.name, balance: Math.round(Number(a.balance) * 100) / 100 })),
+          total: Math.round(totalOtherExpense * 100) / 100
+        },
+        netIncome: Math.round(netIncome * 100) / 100
       });
     }
 
     // Balance Sheet report
     if ((path === '/api/reports/balance-sheet' || path.endsWith('/balance-sheet')) && req.method === 'GET') {
-      // Get all asset accounts
-      const assets = await sql`
-        SELECT a.id, a.name, a.code, a.type, a.balance as total
+      // Get all asset accounts with balances from ledger entries
+      const assetAccounts = await sql`
+        SELECT a.id, a.name, a.code, a.type,
+          COALESCE(SUM(le.debit - le.credit), 0) as balance
         FROM accounts a
-        WHERE a.type IN ('bank', 'accounts_receivable', 'current_assets', 'other_current_asset', 'fixed_asset', 'property_plant_equipment', 'long_term_assets')
+        LEFT JOIN ledger_entries le ON a.id = le.account_id
+        WHERE a.type IN ('bank', 'accounts_receivable', 'current_assets', 'property_plant_equipment', 'long_term_assets')
         AND a.is_active = true
-        AND a.balance != 0
+        GROUP BY a.id, a.name, a.code, a.type
         ORDER BY a.code
       `;
-      // Get all liability accounts
-      const liabilities = await sql`
-        SELECT a.id, a.name, a.code, a.type, a.balance as total
+      // Get all liability accounts with balances from ledger entries
+      const liabilityAccounts = await sql`
+        SELECT a.id, a.name, a.code, a.type,
+          COALESCE(SUM(le.credit - le.debit), 0) as balance
         FROM accounts a
+        LEFT JOIN ledger_entries le ON a.id = le.account_id
         WHERE a.type IN ('accounts_payable', 'credit_card', 'other_current_liabilities', 'long_term_liabilities')
         AND a.is_active = true
-        AND a.balance != 0
+        GROUP BY a.id, a.name, a.code, a.type
         ORDER BY a.code
       `;
-      // Get all equity accounts
-      const equity = await sql`
-        SELECT a.id, a.name, a.code, a.type, a.balance as total
+      // Get equity accounts (excluding Retained Earnings which we calculate)
+      const equityAccounts = await sql`
+        SELECT a.id, a.name, a.code, a.type,
+          COALESCE(SUM(le.credit - le.debit), 0) as balance
         FROM accounts a
+        LEFT JOIN ledger_entries le ON a.id = le.account_id
         WHERE a.type = 'equity'
         AND a.is_active = true
+        AND a.code NOT IN ('3100', '3900')
+        AND a.name != 'Retained Earnings'
+        GROUP BY a.id, a.name, a.code, a.type
         ORDER BY a.code
       `;
-      const totalAssets = assets.reduce((sum: number, a: any) => sum + Number(a.total), 0);
-      const totalLiabilities = liabilities.reduce((sum: number, l: any) => sum + Number(l.total), 0);
-      const totalEquity = equity.reduce((sum: number, e: any) => sum + Number(e.total), 0);
+
+      // Calculate Retained Earnings from income/expense accounts
+      const incomeTotal = await sql`
+        SELECT COALESCE(SUM(le.credit - le.debit), 0) as total
+        FROM ledger_entries le
+        JOIN accounts a ON le.account_id = a.id
+        WHERE a.type IN ('income', 'other_income')
+      `;
+      const expenseTotal = await sql`
+        SELECT COALESCE(SUM(le.debit - le.credit), 0) as total
+        FROM ledger_entries le
+        JOIN accounts a ON le.account_id = a.id
+        WHERE a.type IN ('expenses', 'cost_of_goods_sold', 'other_expense')
+      `;
+      const retainedEarnings = Number(incomeTotal[0]?.total || 0) - Number(expenseTotal[0]?.total || 0);
+
+      const totalAssets = assetAccounts.reduce((sum: number, a: any) => sum + Number(a.balance), 0);
+      const totalLiabilities = liabilityAccounts.reduce((sum: number, l: any) => sum + Number(l.balance), 0);
+      const otherEquity = equityAccounts.reduce((sum: number, e: any) => sum + Number(e.balance), 0);
+      const totalEquity = otherEquity + retainedEarnings;
+
       return res.status(200).json({
-        assets: transformKeys(assets),
-        liabilities: transformKeys(liabilities),
-        equity: transformKeys(equity),
-        totalAssets,
-        totalLiabilities,
-        totalEquity
+        assets: {
+          accounts: assetAccounts.filter((a: any) => Number(a.balance) !== 0).map((a: any) => ({
+            id: a.id, code: a.code, name: a.name, type: a.type,
+            balance: Math.round(Number(a.balance) * 100) / 100
+          })),
+          total: Math.round(totalAssets * 100) / 100
+        },
+        liabilities: {
+          accounts: liabilityAccounts.filter((a: any) => Number(a.balance) !== 0).map((a: any) => ({
+            id: a.id, code: a.code, name: a.name, type: a.type,
+            balance: Math.round(Number(a.balance) * 100) / 100
+          })),
+          total: Math.round(totalLiabilities * 100) / 100
+        },
+        equity: {
+          accounts: equityAccounts.filter((a: any) => Number(a.balance) !== 0).map((a: any) => ({
+            id: a.id, code: a.code, name: a.name, type: a.type,
+            balance: Math.round(Number(a.balance) * 100) / 100
+          })),
+          retainedEarnings: Math.round(retainedEarnings * 100) / 100,
+          total: Math.round(totalEquity * 100) / 100
+        },
+        totalAssets: Math.round(totalAssets * 100) / 100,
+        totalLiabilities: Math.round(totalLiabilities * 100) / 100,
+        totalEquity: Math.round(totalEquity * 100) / 100
       });
     }
 
     // Trial Balance report
     if ((path === '/api/reports/trial-balance' || path.endsWith('/trial-balance')) && req.method === 'GET') {
+      // Debit-normal account types (assets, expenses)
+      const debitNormalTypes = ['bank', 'accounts_receivable', 'current_assets', 'property_plant_equipment', 'long_term_assets', 'expenses', 'cost_of_goods_sold', 'other_expense'];
+
       const accounts = await sql`
         SELECT a.id, a.name, a.code, a.type,
           COALESCE(SUM(le.debit), 0) as total_debits,
@@ -577,13 +686,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         HAVING COALESCE(SUM(le.debit), 0) > 0 OR COALESCE(SUM(le.credit), 0) > 0
         ORDER BY a.code
       `;
-      const totalDebits = accounts.reduce((sum: number, a: any) => sum + Number(a.total_debits), 0);
-      const totalCredits = accounts.reduce((sum: number, a: any) => sum + Number(a.total_credits), 0);
-      return res.status(200).json({
-        accounts: transformKeys(accounts),
-        totalDebits,
-        totalCredits
+
+      // Transform to expected format with debitBalance/creditBalance
+      const result = accounts.map((a: any) => {
+        const totalDebits = Number(a.total_debits) || 0;
+        const totalCredits = Number(a.total_credits) || 0;
+        const isDebitNormal = debitNormalTypes.includes(a.type);
+        const netBalance = isDebitNormal ? (totalDebits - totalCredits) : (totalCredits - totalDebits);
+
+        return {
+          account: {
+            id: a.id,
+            code: a.code,
+            name: a.name,
+            type: a.type
+          },
+          debitBalance: isDebitNormal && netBalance > 0 ? Math.round(netBalance * 100) / 100 : 0,
+          creditBalance: !isDebitNormal && netBalance > 0 ? Math.round(netBalance * 100) / 100 : 0,
+          totalDebits: Math.round(totalDebits * 100) / 100,
+          totalCredits: Math.round(totalCredits * 100) / 100
+        };
       });
+
+      return res.status(200).json(result);
     }
 
     // Cash Flow report
