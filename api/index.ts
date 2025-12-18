@@ -1099,11 +1099,37 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Create invoice
     if ((path === '/api/invoices' || path.endsWith('/invoices')) && req.method === 'POST') {
       const data = req.body;
+
+      // Calculate amount from line items if not provided
+      let invoiceAmount = data.totalAmount || data.amount;
+      if (!invoiceAmount && data.lineItems && Array.isArray(data.lineItems)) {
+        const lineItemsTotal = data.lineItems.reduce((sum: number, item: any) => sum + (Number(item.amount) || 0), 0);
+        const taxAmount = Number(data.taxAmount) || 0;
+        invoiceAmount = lineItemsTotal + taxAmount;
+      }
+      invoiceAmount = Number(invoiceAmount) || 0;
+
+      const subTotal = Number(data.subTotal) || invoiceAmount;
+      const taxAmount = Number(data.taxAmount) || 0;
+
+      console.log('[API] Creating invoice with amount:', invoiceAmount, 'subTotal:', subTotal, 'taxAmount:', taxAmount);
+
       const result = await sql`
-        INSERT INTO transactions (type, reference, date, due_date, contact_id, amount, balance, currency, status, memo, sub_total)
-        VALUES ('invoice', ${data.reference}, ${data.date}, ${data.dueDate}, ${data.contactId}, ${data.amount}, ${data.amount}, ${data.currency || 'CAD'}, 'open', ${data.memo || ''}, ${data.subTotal || data.amount})
+        INSERT INTO transactions (type, reference, date, due_date, contact_id, amount, balance, currency, status, memo, sub_total, tax_amount)
+        VALUES ('invoice', ${data.reference}, ${data.date}, ${data.dueDate}, ${data.contactId}, ${invoiceAmount}, ${invoiceAmount}, ${data.currency || 'CAD'}, 'open', ${data.memo || data.description || ''}, ${subTotal}, ${taxAmount})
         RETURNING id
       `;
+
+      // Insert line items if provided
+      if (data.lineItems && Array.isArray(data.lineItems) && data.lineItems.length > 0) {
+        for (const item of data.lineItems) {
+          await sql`
+            INSERT INTO line_items (transaction_id, description, quantity, unit_price, amount, sales_tax_id, product_id)
+            VALUES (${result[0].id}, ${item.description}, ${item.quantity || 1}, ${item.unitPrice || 0}, ${item.amount || 0}, ${item.salesTaxId || null}, ${item.productId || null})
+          `;
+        }
+      }
+
       return res.status(201).json({ id: result[0].id, success: true });
     }
 
