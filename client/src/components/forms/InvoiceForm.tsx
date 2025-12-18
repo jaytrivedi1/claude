@@ -30,7 +30,7 @@ interface Invoice extends Omit<BaseInvoice, 'lineItems'> {
   appliedCreditAmount?: number;
   appliedCredits?: {id: number, amount: number}[];
 }
-import { CalendarIcon, Plus, Trash2, SendIcon, XIcon, X, HelpCircle, Settings } from "lucide-react";
+import { CalendarIcon, Plus, Trash2, SendIcon, XIcon, X, HelpCircle, Settings, FileText } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -933,34 +933,40 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="h-screen flex flex-col">
+      <form onSubmit={form.handleSubmit(onSubmit)} className="h-screen flex flex-col bg-background">
         {/* Header */}
-        <div className="bg-white border-b px-6 py-4 flex justify-between items-center sticky top-0 z-10">
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl font-semibold">
-              {documentType === 'quotation' ? 'Quotation' : 'Invoice'} #{form.watch('reference')}
-            </h1>
+        <div className="bg-card border-b border-border px-6 py-4 flex justify-between items-center sticky top-0 z-10 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
+              <FileText className="h-5 w-5 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-lg font-semibold text-foreground">
+                {isEditing ? 'Edit' : 'New'} {documentType === 'quotation' ? 'Quotation' : 'Invoice'}
+              </h1>
+              <p className="text-sm text-muted-foreground">#{form.watch('reference') || 'Draft'}</p>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button type="button" variant="ghost" size="icon">
-              <Settings className="h-5 w-5 text-gray-500" />
+          <div className="flex items-center gap-1">
+            <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
+              <Settings className="h-5 w-5" />
             </Button>
-            <Button type="button" variant="ghost" size="icon">
-              <HelpCircle className="h-5 w-5 text-gray-500" />
+            <Button type="button" variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
+              <HelpCircle className="h-5 w-5" />
             </Button>
-            <Button type="button" variant="ghost" size="icon" onClick={onCancel}>
-              <XIcon className="h-5 w-5 text-gray-500" />
+            <Button type="button" variant="ghost" size="icon" onClick={onCancel} className="text-muted-foreground hover:text-destructive">
+              <XIcon className="h-5 w-5" />
             </Button>
           </div>
         </div>
 
-        <div className="p-6 overflow-y-auto flex-grow bg-gray-50">
+        <div className="p-6 overflow-y-auto flex-grow bg-muted/30">
           {/* Main content area with improved 2-column layout */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-7xl mx-auto">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-7xl mx-auto animate-fade-in">
             {/* Left column - Main content */}
             <div className="lg:col-span-8 space-y-6">
               {/* Customer section - with better alignment */}
-              <div className="bg-white rounded-lg border shadow-sm p-6">
+              <div className="bg-card rounded-xl border border-border shadow-sm p-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
                     <FormField
@@ -1029,7 +1035,7 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
               </div>
               
               {/* Billing section - improved alignment */}
-              <div className="bg-white rounded-lg border shadow-sm p-6">
+              <div className="bg-card rounded-xl border border-border shadow-sm p-6">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   <div>
                     <FormLabel className="text-sm font-medium block mb-2">Billing address</FormLabel>
@@ -1194,9 +1200,9 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
               </div>
               
               {/* Tags section removed as requested */}
-              
+
               {/* Line Items - improved table */}
-              <div className="bg-white rounded-lg border shadow-sm p-6">
+              <div className="bg-card rounded-xl border border-border shadow-sm p-6">
                 <div className="flex justify-between items-center mb-4">
                   <div className="text-sm font-medium">Line Items</div>
                   <FormItem>
@@ -1215,9 +1221,9 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                   </FormItem>
                 </div>
                 
-                <div className="border rounded-lg overflow-hidden">
+                <div className="border border-border rounded-xl overflow-hidden">
                   {/* Header */}
-                  <div className="bg-gray-50 grid grid-cols-12 gap-2 text-xs font-semibold p-3 border-b uppercase text-gray-600">
+                  <div className="bg-muted/50 grid grid-cols-12 gap-2 text-xs font-semibold p-3 border-b border-border uppercase text-muted-foreground tracking-wide">
                     <div className="col-span-1 text-center">#</div>
                     <div className="col-span-3">Product/Service</div>
                     <div className="col-span-2">Description</div>
@@ -1230,7 +1236,7 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                   
                   {/* Line Items */}
                   {fields.map((field, index) => (
-                    <div key={field.id} className="grid grid-cols-12 gap-2 p-3 border-b items-center hover:bg-gray-50 transition-colors">
+                    <div key={field.id} className="grid grid-cols-12 gap-2 p-3 border-b border-border items-center hover:bg-muted/30 transition-colors">
                       <div className="col-span-1 text-center text-sm text-gray-500">{index + 1}</div>
                       <div className="col-span-3">
                         <FormField
@@ -1440,14 +1446,14 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                 
                 {/* Totals */}
                 <div className="flex justify-end mt-6">
-                  <div className="w-72 space-y-3 bg-gray-50 p-4 rounded-lg border">
-                    <div className="flex justify-between items-center text-gray-700">
+                  <div className="w-80 space-y-3 bg-muted/30 p-5 rounded-xl border border-border">
+                    <div className="flex justify-between items-center text-foreground">
                       <span className="text-sm font-medium">Subtotal</span>
-                      <span className="font-medium">${formatCurrency(subTotal)}</span>
+                      <span className="font-semibold">${formatCurrency(subTotal)}</span>
                     </div>
-                    
+
                     {/* Tax Summary - Editable */}
-                    <div className="flex justify-between items-center text-gray-700">
+                    <div className="flex justify-between items-center text-foreground">
                       <span className="text-sm">
                         {taxNames.length > 0 
                           ? taxNames.join(', ')  
@@ -1505,14 +1511,14 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                       </div>
                     )}
                     
-                    <div className="flex justify-between border-t border-gray-300 pt-3">
-                      <span className="text-sm font-semibold text-gray-900">Total</span>
-                      <span className="font-semibold text-gray-900">${formatCurrency(totalAmount)}</span>
+                    <div className="flex justify-between border-t border-border pt-3">
+                      <span className="text-sm font-semibold text-foreground">Total</span>
+                      <span className="font-semibold text-foreground">${formatCurrency(totalAmount)}</span>
                     </div>
-                    
+
                     {/* Applied credits with editable amounts */}
                     {appliedCredits.length > 0 && (
-                      <div className="space-y-2 mt-3 pt-3 border-t border-gray-300">
+                      <div className="space-y-2 mt-3 pt-3 border-t border-border">
                         {appliedCredits.map(ac => (
                           <div key={ac.creditId} className="flex justify-between items-center text-gray-700">
                             <span className="text-sm">Credit #{ac.creditId}</span>
@@ -1534,8 +1540,8 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                       </div>
                     )}
                     
-                    <div className="flex justify-between font-bold border-t-2 border-gray-400 pt-3 mt-4 text-lg">
-                      <span>Balance due</span>
+                    <div className="flex justify-between font-bold border-t-2 border-primary/30 pt-4 mt-4 text-lg">
+                      <span className="text-foreground">Balance due</span>
                       {currency !== homeCurrency ? (
                         <div className="text-right">
                           <div>{CURRENCIES.find(c => c.code === currency)?.symbol || currency}{formatCurrency(balanceDue)}</div>
@@ -1552,38 +1558,38 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
               </div>
               
               {/* Invoice message */}
-              <div className="bg-white rounded-lg border shadow-sm p-6">
+              <div className="bg-card rounded-xl border border-border shadow-sm p-6">
                 <FormLabel className="text-sm font-medium block mb-2">Message on invoice</FormLabel>
-                <Textarea 
-                  className="min-h-[100px] bg-white border-gray-300 resize-none" 
+                <Textarea
+                  className="min-h-[100px] bg-background border-border resize-none"
                   placeholder="Add a personal note or message for this invoice"
                 />
               </div>
             </div>
-            
+
             {/* Right column - Invoice details */}
             <div className="lg:col-span-4 space-y-6">
               {/* Balance Due Card */}
-              <div className="bg-white rounded-lg border shadow-sm p-6">
+              <div className="bg-card rounded-xl border border-border shadow-sm p-6">
                 <div className="text-center">
-                  <div className="text-xs uppercase tracking-wide text-gray-500 mb-2">Balance Due</div>
+                  <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2 font-medium">Balance Due</div>
                   {currency !== homeCurrency ? (
                     <div>
-                      <div className="text-3xl font-bold text-gray-900">
+                      <div className="text-3xl font-bold text-foreground">
                         {CURRENCIES.find(c => c.code === currency)?.symbol || currency}{formatCurrency(balanceDue)}
                       </div>
-                      <div className="text-sm text-gray-500 mt-1">
+                      <div className="text-sm text-muted-foreground mt-1">
                         ≈ {CURRENCIES.find(c => c.code === homeCurrency)?.symbol || homeCurrency}{formatCurrency(balanceDue * exchangeRate)}
                       </div>
                     </div>
                   ) : (
-                    <div className="text-3xl font-bold text-gray-900">${formatCurrency(balanceDue)}</div>
+                    <div className="text-3xl font-bold text-primary">${formatCurrency(balanceDue)}</div>
                   )}
                 </div>
               </div>
               
               {/* Invoice Number Card */}
-              <div className="bg-white rounded-lg border shadow-sm p-6">
+              <div className="bg-card rounded-xl border border-border shadow-sm p-6">
                 <FormLabel className="text-sm font-medium block mb-2">Invoice no.</FormLabel>
                 <FormField
                   control={form.control}
@@ -1591,8 +1597,8 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                   render={({ field }) => (
                     <FormItem>
                       <FormControl>
-                        <Input 
-                          className="bg-white border-gray-300 h-10" 
+                        <Input
+                          className="bg-background border-border h-10"
                           {...field}
                         />
                       </FormControl>
@@ -1601,11 +1607,11 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                   )}
                 />
               </div>
-              
+
               {/* Attach Documents Card */}
-              <div className="bg-white rounded-lg border shadow-sm p-6">
+              <div className="bg-card rounded-xl border border-border shadow-sm p-6">
                 <FormLabel className="text-sm font-medium block mb-3">Attach documents</FormLabel>
-                <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-gray-400 transition-colors">
+                <div className="border-2 border-dashed border-border rounded-xl p-6 text-center hover:border-primary/50 hover:bg-primary/5 transition-colors cursor-pointer">
                   <div className="relative inline-block">
                     <Button 
                       type="button" 
@@ -1634,7 +1640,7 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
               
               {/* Available Credits Panel */}
               {(unappliedCredits.length > 0 || appliedCredits.length > 0) && (
-                <div className="bg-white rounded-lg border shadow-sm p-6">
+                <div className="bg-card rounded-xl border border-border shadow-sm p-6">
                   <div className="mb-4">
                     <div className="text-sm font-medium mb-2">Available Credits</div>
                     {unappliedCredits.length === 0 && appliedCredits.length > 0 ? (
@@ -1708,15 +1714,15 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
         </div>
         
         {/* Fixed footer - modernized */}
-        <div className="border-t bg-white py-4 px-6 flex flex-col md:flex-row gap-3 justify-between z-50 shadow-lg sticky bottom-0 mt-auto">
+        <div className="border-t border-border bg-card py-4 px-6 flex flex-col md:flex-row gap-3 justify-between z-50 shadow-[0_-4px_6px_-1px_rgb(0,0,0,0.05)] sticky bottom-0 mt-auto">
           <Button type="button" variant="outline" onClick={onCancel} className="md:w-auto w-full h-10" data-testid="button-cancel">
             Cancel
           </Button>
-          
+
           <div className="flex flex-wrap md:flex-nowrap gap-2 md:space-x-2">
             <div className="flex md:hidden w-full justify-end">
               {/* Mobile save button */}
-              <Button 
+              <Button
                 type="submit"
                 disabled={saveInvoice.isPending}
                 className="w-full md:w-auto"
@@ -1725,28 +1731,29 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                 {saveInvoice.isPending ? 'Saving...' : `Save and send ${documentType}`}
               </Button>
             </div>
-            
+
             <div className="hidden md:flex md:space-x-2 flex-wrap gap-2">
-              <Button type="button" variant="outline" size="sm" className="hidden lg:inline-flex">
+              <Button type="button" variant="outline" size="sm" className="hidden lg:inline-flex text-muted-foreground hover:text-foreground">
                 Print or Preview
               </Button>
-              <Button type="button" variant="outline" size="sm" className="hidden lg:inline-flex">
+              <Button type="button" variant="outline" size="sm" className="hidden lg:inline-flex text-muted-foreground hover:text-foreground">
                 Customize
               </Button>
-              
+
               <div className="flex">
-                <Button 
+                <Button
                   type="submit"
                   disabled={saveInvoice.isPending}
+                  className="rounded-r-none"
                   data-testid="button-save"
                 >
                   {saveInvoice.isPending ? 'Saving...' : `Save ${documentType === 'quotation' ? 'Quotation' : 'Invoice'}`}
                 </Button>
-                <div className="relative ml-px">
+                <div className="relative">
                   <FormItem>
                     <FormControl>
-                      <Select 
-                        defaultValue="save" 
+                      <Select
+                        defaultValue="save"
                         onValueChange={(value) => {
                           if (value === "save_send") {
                             setSendInvoiceEmail(true);
@@ -1754,7 +1761,7 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
                           }
                         }}
                       >
-                        <SelectTrigger className="px-2 rounded-l-none h-10 border-l-0" data-testid="select-save-options">
+                        <SelectTrigger className="px-2 rounded-l-none h-10 border-l border-primary-foreground/20 bg-primary text-primary-foreground hover:bg-primary/90" data-testid="select-save-options">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent align="end">
