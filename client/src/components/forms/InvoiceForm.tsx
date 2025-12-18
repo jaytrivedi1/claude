@@ -927,6 +927,15 @@ export default function InvoiceForm({ invoice, lineItems, onSuccess, onCancel, i
     }
     
     console.log("Sending to server:", backendPayload);
+    console.log("DEBUG - Key values:", {
+      totalAmount,
+      subTotal,
+      taxAmount,
+      lineItemsCount: backendLineItems.length,
+      lineItemAmounts: backendLineItems.map(item => item.amount),
+      payloadTotalAmount: backendPayload.totalAmount,
+      payloadSubTotal: backendPayload.subTotal,
+    });
     if (saveInvoice.isPending) return; // Prevent double submission
     saveInvoice.mutate(backendPayload);
   };

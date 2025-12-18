@@ -394,6 +394,20 @@ export class DatabaseStorage implements IStorage {
       const transactionData: any = {
         ...transaction
       };
+
+      // CRITICAL: Ensure amount is a valid number before insert
+      if (!Number.isFinite(transactionData.amount) || transactionData.amount === null || transactionData.amount === undefined) {
+        console.error('[createTransaction] Invalid amount detected:', transactionData.amount);
+        // Try to calculate from line items
+        const calculatedAmount = lineItemsData.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+        transactionData.amount = roundTo2Decimals(calculatedAmount);
+        console.log('[createTransaction] Recalculated amount from line items:', transactionData.amount);
+      }
+
+      // Also ensure balance is valid
+      if (!Number.isFinite(transactionData.balance) || transactionData.balance === null || transactionData.balance === undefined) {
+        transactionData.balance = transactionData.amount;
+      }
       
       // CRITICAL: Explicitly add currency metadata for foreign currency transactions
       // This ensures the currency fields are not filtered out during database insert
