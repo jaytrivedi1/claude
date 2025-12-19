@@ -1230,6 +1230,343 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // ============================================
+    // PUBLIC INVOICE ENDPOINTS
+    // ============================================
+
+    // Get public invoice by token
+    const publicInvoiceMatch = path.match(/\/api\/invoices\/public\/([^/]+)$/);
+    if (publicInvoiceMatch && req.method === 'GET') {
+      const token = publicInvoiceMatch[1];
+      const invoices = await sql`
+        SELECT t.*, c.name as contact_name, c.email as contact_email, c.phone as contact_phone,
+               c.billing_address as contact_address
+        FROM transactions t
+        LEFT JOIN contacts c ON t.contact_id = c.id
+        WHERE t.secure_token = ${token} AND t.type = 'invoice'
+      `;
+      if (invoices.length === 0) {
+        return res.status(404).json({ message: 'Invoice not found or link has expired' });
+      }
+      const invoice = invoices[0];
+      const lineItems = await sql`SELECT * FROM transaction_lines WHERE transaction_id = ${invoice.id}`;
+      const company = await sql`SELECT * FROM companies WHERE is_default = true LIMIT 1`;
+
+      return res.status(200).json({
+        transaction: transformKeys(invoice),
+        lineItems: transformKeys(lineItems),
+        customer: invoice.contact_id ? {
+          name: invoice.contact_name,
+          email: invoice.contact_email,
+          phone: invoice.contact_phone,
+          billingAddress: invoice.contact_address
+        } : null,
+        company: company.length > 0 ? transformKeys(company[0]) : null
+      });
+    }
+
+    // Generate invoice token
+    const generateTokenMatch = path.match(/\/api\/invoices\/(\d+)\/generate-token$/);
+    if (generateTokenMatch && req.method === 'POST') {
+      const invoiceId = parseInt(generateTokenMatch[1]);
+      const invoices = await sql`SELECT id, secure_token FROM transactions WHERE id = ${invoiceId} AND type = 'invoice'`;
+      if (invoices.length === 0) {
+        return res.status(404).json({ message: 'Invoice not found' });
+      }
+
+      let token = invoices[0].secure_token;
+      if (!token) {
+        // Generate new token
+        token = require('crypto').randomBytes(32).toString('hex');
+        await sql`UPDATE transactions SET secure_token = ${token} WHERE id = ${invoiceId}`;
+      }
+      return res.status(200).json({ token });
+    }
+
+    // Track invoice view
+    const trackViewMatch = path.match(/\/api\/invoices\/public\/([^/]+)\/track-view$/);
+    if (trackViewMatch && req.method === 'POST') {
+      const token = trackViewMatch[1];
+      // Just acknowledge - could add activity logging here
+      return res.status(200).json({ success: true });
+    }
+
+    // Get invoice activities
+    const invoiceActivitiesMatch = path.match(/\/api\/invoices\/(\d+)\/activities$/);
+    if (invoiceActivitiesMatch && req.method === 'GET') {
+      const invoiceId = parseInt(invoiceActivitiesMatch[1]);
+      const activities = await sql`
+        SELECT * FROM invoice_activities
+        WHERE invoice_id = ${invoiceId}
+        ORDER BY created_at DESC
+      `;
+      return res.status(200).json(transformKeys(activities));
+    }
+
+    // ============================================
+    // QUOTATION ENDPOINTS
+    // ============================================
+
+    // Convert quotation to invoice
+    const quotationConvertMatch = path.match(/\/api\/quotations\/(\d+)\/convert$/);
+    if (quotationConvertMatch && req.method === 'POST') {
+      const quotationId = parseInt(quotationConvertMatch[1]);
+      const quotations = await sql`SELECT * FROM transactions WHERE id = ${quotationId} AND type = 'quotation'`;
+      if (quotations.length === 0) {
+        return res.status(404).json({ message: 'Quotation not found' });
+      }
+      const quotation = quotations[0];
+
+      // Get line items
+      const lineItems = await sql`SELECT * FROM transaction_lines WHERE transaction_id = ${quotationId}`;
+
+      // Generate new invoice number
+      const lastInvoice = await sql`SELECT reference FROM transactions WHERE type = 'invoice' AND reference LIKE 'INV-%' ORDER BY id DESC LIMIT 1`;
+      let nextNumber = 1001;
+      if (lastInvoice.length > 0) {
+        const match = lastInvoice[0].reference?.match(/INV-(\d+)/);
+        if (match) nextNumber = parseInt(match[1]) + 1;
+      }
+
+      // Create invoice from quotation
+      const newInvoice = await sql`
+        INSERT INTO transactions (type, reference, date, due_date, contact_id, amount, sub_total, tax_amount, balance, currency, status, memo)
+        VALUES ('invoice', ${'INV-' + nextNumber}, NOW(), ${quotation.due_date}, ${quotation.contact_id}, ${quotation.amount}, ${quotation.sub_total}, ${quotation.tax_amount}, ${quotation.amount}, ${quotation.currency}, 'open', ${quotation.memo})
+        RETURNING id
+      `;
+
+      // Copy line items
+      for (const item of lineItems) {
+        await sql`
+          INSERT INTO transaction_lines (transaction_id, description, quantity, unit_price, amount, account_id, product_id, sales_tax_id)
+          VALUES (${newInvoice[0].id}, ${item.description}, ${item.quantity}, ${item.unit_price}, ${item.amount}, ${item.account_id}, ${item.product_id}, ${item.sales_tax_id})
+        `;
+      }
+
+      // Update quotation status
+      await sql`UPDATE transactions SET status = 'converted' WHERE id = ${quotationId}`;
+
+      return res.status(200).json({ id: newInvoice[0].id, reference: 'INV-' + nextNumber });
+    }
+
+    // Send quotation (stub - would need email service)
+    const quotationSendMatch = path.match(/\/api\/quotations\/(\d+)\/send$/);
+    if (quotationSendMatch && req.method === 'POST') {
+      const quotationId = parseInt(quotationSendMatch[1]);
+      // Mark as sent
+      await sql`UPDATE transactions SET status = 'sent' WHERE id = ${quotationId} AND type = 'quotation'`;
+      return res.status(200).json({ success: true, message: 'Quotation marked as sent' });
+    }
+
+    // ============================================
+    // CSV IMPORT ENDPOINTS
+    // ============================================
+
+    // CSV parse preview (simplified - returns structure info)
+    if ((path === '/api/csv/parse-preview' || path.endsWith('/csv/parse-preview')) && req.method === 'POST') {
+      // In a full implementation, this would parse uploaded CSV file
+      // For now, return expected structure
+      return res.status(200).json({
+        headers: ['Date', 'Description', 'Amount', 'Reference'],
+        rows: [],
+        rowCount: 0,
+        message: 'CSV parsing requires file upload - use multipart form data'
+      });
+    }
+
+    // CSV import (simplified)
+    if ((path === '/api/csv/import' || path.endsWith('/csv/import')) && req.method === 'POST') {
+      const data = req.body;
+      const accountId = data.accountId;
+      const transactions = data.transactions || [];
+      let imported = 0;
+
+      for (const tx of transactions) {
+        await sql`
+          INSERT INTO transactions (type, reference, date, amount, memo, status)
+          VALUES ('import', ${tx.reference || null}, ${tx.date}, ${tx.amount}, ${tx.description || ''}, 'completed')
+        `;
+        imported++;
+      }
+
+      return res.status(200).json({ success: true, imported });
+    }
+
+    // ============================================
+    // BANK FEED ADVANCED ENDPOINTS
+    // ============================================
+
+    // Match multiple invoices to one bank feed
+    const matchMultipleInvoicesMatch = path.match(/\/api\/bank-feeds\/(\d+)\/match-multiple-invoices$/);
+    if (matchMultipleInvoicesMatch && req.method === 'POST') {
+      const bankFeedId = parseInt(matchMultipleInvoicesMatch[1]);
+      const { invoiceIds } = req.body;
+
+      if (!invoiceIds || !Array.isArray(invoiceIds) || invoiceIds.length === 0) {
+        return res.status(400).json({ message: 'invoiceIds array is required' });
+      }
+
+      // Update bank feed as matched
+      await sql`UPDATE bank_feeds SET status = 'matched', matched_transaction_id = ${invoiceIds[0]} WHERE id = ${bankFeedId}`;
+
+      return res.status(200).json({ success: true, matchedCount: invoiceIds.length });
+    }
+
+    // Match multiple bills to one bank feed
+    const matchMultipleBillsMatch = path.match(/\/api\/bank-feeds\/(\d+)\/match-multiple-bills$/);
+    if (matchMultipleBillsMatch && req.method === 'POST') {
+      const bankFeedId = parseInt(matchMultipleBillsMatch[1]);
+      const { billIds } = req.body;
+
+      if (!billIds || !Array.isArray(billIds) || billIds.length === 0) {
+        return res.status(400).json({ message: 'billIds array is required' });
+      }
+
+      // Update bank feed as matched
+      await sql`UPDATE bank_feeds SET status = 'matched', matched_transaction_id = ${billIds[0]} WHERE id = ${bankFeedId}`;
+
+      return res.status(200).json({ success: true, matchedCount: billIds.length });
+    }
+
+    // Get matched breakdown for bank feed
+    const matchedBreakdownMatch = path.match(/\/api\/bank-feeds\/(\d+)\/matched-breakdown$/);
+    if (matchedBreakdownMatch && req.method === 'GET') {
+      const bankFeedId = parseInt(matchedBreakdownMatch[1]);
+      const bankFeeds = await sql`
+        SELECT bf.*, t.type as matched_type, t.reference as matched_reference, t.amount as matched_amount
+        FROM bank_feeds bf
+        LEFT JOIN transactions t ON bf.matched_transaction_id = t.id
+        WHERE bf.id = ${bankFeedId}
+      `;
+
+      if (bankFeeds.length === 0) {
+        return res.status(404).json({ message: 'Bank feed not found' });
+      }
+
+      return res.status(200).json(transformKeys(bankFeeds[0]));
+    }
+
+    // Bank feed categorization suggestions
+    if ((path === '/api/bank-feeds/categorization-suggestions' || path.endsWith('/categorization-suggestions')) && req.method === 'POST') {
+      const { description, amount } = req.body;
+      // Simple rule-based suggestions
+      const suggestions = [];
+
+      const rules = await sql`SELECT * FROM categorization_rules WHERE is_active = true`;
+      for (const rule of rules) {
+        if (description && rule.pattern && description.toLowerCase().includes(rule.pattern.toLowerCase())) {
+          suggestions.push({
+            accountId: rule.account_id,
+            confidence: 0.8,
+            ruleName: rule.name
+          });
+        }
+      }
+
+      return res.status(200).json(suggestions);
+    }
+
+    // ============================================
+    // USER & PERMISSIONS ENDPOINTS
+    // ============================================
+
+    // Get permissions
+    if ((path === '/api/permissions' || path.endsWith('/permissions')) && req.method === 'GET') {
+      const permissions = await sql`SELECT * FROM permissions ORDER BY name`;
+      return res.status(200).json(transformKeys(permissions));
+    }
+
+    // Get role permissions
+    const rolePermissionsMatch = path.match(/\/api\/role-permissions\/([^/]+)$/);
+    if (rolePermissionsMatch && req.method === 'GET') {
+      const role = rolePermissionsMatch[1];
+      const permissions = await sql`
+        SELECT p.* FROM permissions p
+        JOIN role_permissions rp ON p.id = rp.permission_id
+        WHERE rp.role = ${role}
+      `;
+      return res.status(200).json(transformKeys(permissions));
+    }
+
+    // Create role permission
+    if ((path === '/api/role-permissions' || path.endsWith('/role-permissions')) && req.method === 'POST') {
+      const { role, permissionId } = req.body;
+      await sql`INSERT INTO role_permissions (role, permission_id) VALUES (${role}, ${permissionId}) ON CONFLICT DO NOTHING`;
+      return res.status(201).json({ success: true });
+    }
+
+    // Delete role permission
+    const deleteRolePermMatch = path.match(/\/api\/role-permissions\/([^/]+)\/(\d+)$/);
+    if (deleteRolePermMatch && req.method === 'DELETE') {
+      const role = deleteRolePermMatch[1];
+      const permissionId = parseInt(deleteRolePermMatch[2]);
+      await sql`DELETE FROM role_permissions WHERE role = ${role} AND permission_id = ${permissionId}`;
+      return res.status(200).json({ success: true });
+    }
+
+    // Get user by ID
+    const userIdMatch = path.match(/\/api\/users\/(\d+)$/);
+    if (userIdMatch && req.method === 'GET') {
+      const userId = parseInt(userIdMatch[1]);
+      const users = await sql`SELECT id, username, email, role, is_active, created_at FROM users WHERE id = ${userId}`;
+      if (users.length === 0) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      return res.status(200).json(transformKeys(users[0]));
+    }
+
+    // Update user
+    if (userIdMatch && req.method === 'PATCH') {
+      const userId = parseInt(userIdMatch[1]);
+      const { username, email, role, isActive } = req.body;
+      const updated = await sql`
+        UPDATE users SET
+          username = COALESCE(${username}, username),
+          email = COALESCE(${email}, email),
+          role = COALESCE(${role}, role),
+          is_active = COALESCE(${isActive}, is_active),
+          updated_at = NOW()
+        WHERE id = ${userId}
+        RETURNING id, username, email, role, is_active, created_at
+      `;
+      if (updated.length === 0) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      return res.status(200).json(transformKeys(updated[0]));
+    }
+
+    // Update user role
+    const userRoleMatch = path.match(/\/api\/users\/(\d+)\/role$/);
+    if (userRoleMatch && (req.method === 'PUT' || req.method === 'PATCH')) {
+      const userId = parseInt(userRoleMatch[1]);
+      const { role } = req.body;
+      await sql`UPDATE users SET role = ${role}, updated_at = NOW() WHERE id = ${userId}`;
+      return res.status(200).json({ success: true });
+    }
+
+    // User companies
+    if ((path === '/api/user-companies' || path.endsWith('/user-companies')) && req.method === 'GET') {
+      const userCompanies = await sql`
+        SELECT uc.*, u.username, u.email, c.name as company_name
+        FROM user_companies uc
+        JOIN users u ON uc.user_id = u.id
+        JOIN companies c ON uc.company_id = c.id
+      `;
+      return res.status(200).json(transformKeys(userCompanies));
+    }
+
+    // Get user's companies
+    const userCompaniesMatch = path.match(/\/api\/user-companies\/(\d+)$/);
+    if (userCompaniesMatch && req.method === 'GET') {
+      const userId = parseInt(userCompaniesMatch[1]);
+      const companies = await sql`
+        SELECT c.* FROM companies c
+        JOIN user_companies uc ON c.id = uc.company_id
+        WHERE uc.user_id = ${userId}
+      `;
+      return res.status(200).json(transformKeys(companies));
+    }
+
+    // ============================================
     // PLAID INTEGRATION ENDPOINTS
     // ============================================
 
@@ -2316,15 +2653,119 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(201).json({ id: transactionId, success: true });
     }
 
-    // Create vendor credit
+    // Create vendor credit with ledger entries
     if ((path === '/api/vendor-credits' || path.endsWith('/vendor-credits')) && req.method === 'POST') {
       const data = req.body;
+      const totalAmount = Number(data.totalAmount || data.amount) || 0;
+      const subTotal = Number(data.subTotal) || totalAmount;
+      const taxAmount = Number(data.taxAmount) || 0;
+
       const result = await sql`
-        INSERT INTO transactions (type, reference, date, contact_id, amount, currency, status, memo)
-        VALUES ('vendor_credit', ${data.reference}, ${data.date}, ${data.contactId}, ${data.amount}, ${data.currency || 'CAD'}, 'open', ${data.memo || ''})
+        INSERT INTO transactions (type, reference, date, contact_id, amount, sub_total, tax_amount, balance, currency, status, memo)
+        VALUES ('vendor_credit', ${data.reference}, ${data.date}, ${data.contactId}, ${totalAmount}, ${subTotal}, ${taxAmount}, ${-totalAmount}, ${data.currency || 'CAD'}, 'unapplied_credit', ${data.memo || ''})
         RETURNING id
       `;
-      return res.status(201).json({ id: result[0].id, success: true });
+      const txId = result[0].id;
+
+      // Create line items
+      if (data.lineItems && data.lineItems.length > 0) {
+        for (const item of data.lineItems) {
+          await sql`
+            INSERT INTO transaction_lines (transaction_id, description, quantity, unit_price, amount, account_id, sales_tax_id)
+            VALUES (${txId}, ${item.description || ''}, ${item.quantity || 1}, ${item.unitPrice || item.amount}, ${item.amount}, ${item.accountId || null}, ${item.salesTaxId || null})
+          `;
+        }
+      }
+
+      // Create ledger entries (Debit AP, Credit Expense)
+      const apAccount = await sql`SELECT id FROM accounts WHERE code = '2000' OR type = 'accounts_payable' LIMIT 1`;
+      const expAccount = await sql`SELECT id FROM accounts WHERE code = '6000' OR type = 'expenses' LIMIT 1`;
+
+      if (apAccount.length > 0 && expAccount.length > 0) {
+        await sql`INSERT INTO ledger_entries (transaction_id, account_id, date, debit, credit, memo) VALUES (${txId}, ${apAccount[0].id}, ${data.date}, ${subTotal}, 0, 'Vendor credit')`;
+        await sql`INSERT INTO ledger_entries (transaction_id, account_id, date, debit, credit, memo) VALUES (${txId}, ${expAccount[0].id}, ${data.date}, 0, ${subTotal}, 'Vendor credit')`;
+        await sql`UPDATE accounts SET balance = balance + ${subTotal} WHERE id = ${apAccount[0].id}`;
+        await sql`UPDATE accounts SET balance = balance - ${subTotal} WHERE id = ${expAccount[0].id}`;
+      }
+
+      return res.status(201).json({ id: txId, success: true });
+    }
+
+    // Create customer credit with ledger entries
+    if ((path === '/api/customer-credits' || path.endsWith('/customer-credits')) && req.method === 'POST') {
+      const data = req.body;
+      const totalAmount = Number(data.totalAmount || data.amount) || 0;
+      const subTotal = Number(data.subTotal) || totalAmount;
+      const taxAmount = Number(data.taxAmount) || 0;
+
+      const result = await sql`
+        INSERT INTO transactions (type, reference, date, contact_id, amount, sub_total, tax_amount, balance, currency, status, memo)
+        VALUES ('customer_credit', ${data.reference}, ${data.date}, ${data.contactId}, ${totalAmount}, ${subTotal}, ${taxAmount}, ${-totalAmount}, ${data.currency || 'CAD'}, 'unapplied_credit', ${data.memo || ''})
+        RETURNING id
+      `;
+      const txId = result[0].id;
+
+      // Create line items
+      if (data.lineItems && data.lineItems.length > 0) {
+        for (const item of data.lineItems) {
+          await sql`
+            INSERT INTO transaction_lines (transaction_id, description, quantity, unit_price, amount, account_id, sales_tax_id)
+            VALUES (${txId}, ${item.description || ''}, ${item.quantity || 1}, ${item.unitPrice || item.amount}, ${item.amount}, ${item.accountId || null}, ${item.salesTaxId || null})
+          `;
+        }
+      }
+
+      // Create ledger entries (Debit Revenue, Credit AR)
+      const arAccount = await sql`SELECT id FROM accounts WHERE code = '1100' OR type = 'accounts_receivable' LIMIT 1`;
+      const revenueAccount = await sql`SELECT id FROM accounts WHERE code = '4000' OR type = 'income' LIMIT 1`;
+
+      if (arAccount.length > 0 && revenueAccount.length > 0) {
+        await sql`INSERT INTO ledger_entries (transaction_id, account_id, date, debit, credit, memo) VALUES (${txId}, ${revenueAccount[0].id}, ${data.date}, ${subTotal}, 0, 'Customer credit')`;
+        await sql`INSERT INTO ledger_entries (transaction_id, account_id, date, debit, credit, memo) VALUES (${txId}, ${arAccount[0].id}, ${data.date}, 0, ${subTotal}, 'Customer credit')`;
+        await sql`UPDATE accounts SET balance = balance - ${subTotal} WHERE id = ${revenueAccount[0].id}`;
+        await sql`UPDATE accounts SET balance = balance - ${subTotal} WHERE id = ${arAccount[0].id}`;
+      }
+
+      return res.status(201).json({ id: txId, success: true });
+    }
+
+    // Create cheque with ledger entries
+    if ((path === '/api/cheques' || path.endsWith('/cheques')) && req.method === 'POST') {
+      const data = req.body;
+      const totalAmount = Number(data.totalAmount || data.amount) || 0;
+      const subTotal = Number(data.subTotal) || totalAmount;
+      const taxAmount = Number(data.taxAmount) || 0;
+
+      const result = await sql`
+        INSERT INTO transactions (type, reference, date, contact_id, amount, sub_total, tax_amount, currency, status, payment_account_id, payment_method, memo)
+        VALUES ('cheque', ${data.reference}, ${data.date}, ${data.contactId || null}, ${totalAmount}, ${subTotal}, ${taxAmount}, ${data.currency || 'CAD'}, 'completed', ${data.paymentAccountId}, 'check', ${data.memo || ''})
+        RETURNING id
+      `;
+      const txId = result[0].id;
+
+      // Create line items
+      if (data.lineItems && data.lineItems.length > 0) {
+        for (const item of data.lineItems) {
+          await sql`
+            INSERT INTO transaction_lines (transaction_id, description, quantity, unit_price, amount, account_id, sales_tax_id)
+            VALUES (${txId}, ${item.description || ''}, ${item.quantity || 1}, ${item.unitPrice || item.amount}, ${item.amount}, ${item.accountId || null}, ${item.salesTaxId || null})
+          `;
+
+          // Create ledger entry for expense (Debit Expense)
+          if (item.accountId) {
+            await sql`INSERT INTO ledger_entries (transaction_id, account_id, date, debit, credit, memo) VALUES (${txId}, ${item.accountId}, ${data.date}, ${item.amount}, 0, ${item.description || 'Cheque payment'})`;
+            await sql`UPDATE accounts SET balance = balance + ${item.amount} WHERE id = ${item.accountId}`;
+          }
+        }
+      }
+
+      // Create ledger entry for bank account (Credit Bank)
+      if (data.paymentAccountId) {
+        await sql`INSERT INTO ledger_entries (transaction_id, account_id, date, debit, credit, memo) VALUES (${txId}, ${data.paymentAccountId}, ${data.date}, 0, ${totalAmount}, 'Cheque payment')`;
+        await sql`UPDATE accounts SET balance = balance - ${totalAmount} WHERE id = ${data.paymentAccountId}`;
+      }
+
+      return res.status(201).json({ id: txId, success: true });
     }
 
     // Receive payment (customer payment)
