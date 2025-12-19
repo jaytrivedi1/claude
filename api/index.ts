@@ -116,9 +116,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end();
   }
 
-  // Get the path - handle various formats
+  // Get the path - handle various formats including Vercel rewrites
   const url = req.url || '';
-  const path = url.split('?')[0]; // Remove query string
+  const urlParts = url.split('?');
+  const queryString = urlParts[1] || '';
+  const searchParams = new URLSearchParams(queryString);
+
+  // Check if path is passed as query param (from Vercel rewrite)
+  const pathFromQuery = searchParams.get('path');
+  const path = pathFromQuery ? `/api/${pathFromQuery}` : urlParts[0];
+
   const userId = req.headers['x-user-id'] as string;
 
   // Check DATABASE_URL
