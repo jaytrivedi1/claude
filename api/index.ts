@@ -1164,6 +1164,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ message: "startDate and endDate are required" });
       }
 
+      // Helper to normalize date to YYYY-MM-DD string for comparison
+      const toDateString = (d: any): string => {
+        if (!d) return '';
+        const date = new Date(d);
+        return date.toISOString().split('T')[0];
+      };
+
+      const startDate = toDateString(startDateStr);
+      const endDate = toDateString(endDateStr);
+
       // Get all accounts
       let accounts;
       if (accountIdStr) {
@@ -1172,7 +1182,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         accounts = await sql`SELECT * FROM accounts WHERE is_active = true ORDER BY code`;
       }
 
-      // Get all ledger entries with transaction and contact info
+      // Get all ledger entries with transaction and contact info using SQL date filtering
       const allEntries = await sql`
         SELECT le.*, t.type as tx_type, t.reference as tx_reference, t.memo as tx_memo, t.contact_id,
                c.name as contact_name, c.display_name as contact_display_name
@@ -1182,22 +1192,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ORDER BY le.date, le.transaction_id, le.id
       `;
 
-      const accountGroups = accounts.map((account: any) => {
-        // Calculate beginning balance (entries before start date)
-        const beginningEntries = allEntries.filter((e: any) =>
-          e.account_id === account.id && new Date(e.date) < new Date(startDateStr)
-        );
-        let beginningBalance = 0;
-        beginningEntries.forEach((e: any) => {
-          beginningBalance += Number(e.debit || 0) - Number(e.credit || 0);
-        });
+      // Get all accounts for split account lookup
+      const allAccounts = await sql`SELECT * FROM accounts`;
+      const accountMap = new Map(allAccounts.map((a: any) => [a.id, a]));
 
-        // Get entries within date range
-        const periodEntries = allEntries.filter((e: any) =>
-          e.account_id === account.id &&
-          new Date(e.date) >= new Date(startDateStr) &&
-          new Date(e.date) <= new Date(endDateStr)
-        );
+      const accountGroups = await Promise.all(accounts.map(async (account: any) => {
+        // Calculate beginning balance using SQL (entries before start date)
+        const beginningResult = await sql`
+          SELECT
+            COALESCE(SUM(debit), 0) as total_debit,
+            COALESCE(SUM(credit), 0) as total_credit
+          FROM ledger_entries
+          WHERE account_id = ${account.id}
+            AND date < ${startDate}::date
+        `;
+        const beginningDebit = Number(beginningResult[0]?.total_debit || 0);
+        const beginningCredit = Number(beginningResult[0]?.total_credit || 0);
+        const beginningBalance = beginningDebit - beginningCredit;
+
+        // Get entries within date range using SQL
+        const periodEntries = await sql`
+          SELECT le.*, t.type as tx_type, t.reference as tx_reference, t.memo as tx_memo, t.contact_id,
+                 c.name as contact_name, c.display_name as contact_display_name
+          FROM ledger_entries le
+          LEFT JOIN transactions t ON le.transaction_id = t.id
+          LEFT JOIN contacts c ON t.contact_id = c.id
+          WHERE le.account_id = ${account.id}
+            AND le.date >= ${startDate}::date
+            AND le.date <= ${endDate}::date
+          ORDER BY le.date, le.transaction_id, le.id
+        `;
 
         // Calculate running balance and enrich entries
         let runningBalance = beginningBalance;
@@ -1206,12 +1230,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const credit = Number(entry.credit || 0);
           runningBalance += debit - credit;
 
-          // Find split account
+          // Find split account from all entries
           const otherEntry = allEntries.find((e: any) =>
             e.transaction_id === entry.transaction_id && e.id !== entry.id
           );
-          const splitAccountName = otherEntry ?
-            accounts.find((a: any) => a.id === otherEntry.account_id)?.name || 'Split' : 'Split';
+          const splitAccount = otherEntry ? accountMap.get(otherEntry.account_id) : null;
+          const splitAccountName = splitAccount?.name || 'Split';
 
           return {
             id: entry.id,
@@ -1248,7 +1272,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           accountTotal,
           endingBalance: beginningBalance + accountTotal
         };
-      });
+      }));
 
       // Filter out accounts with no activity
       const accountsWithActivity = accountGroups.filter((g: any) =>
