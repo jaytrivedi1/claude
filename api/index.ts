@@ -136,17 +136,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Get the path - try multiple sources
   let path: string;
 
-  // Source 1: _path query param from rewrite
+  // Source 1: slug query param from rewrite (primary)
+  const slugParam = req.query.slug;
+
+  // Source 2: _path query param (alternative)
   const rewritePath = req.query._path || req.query['_path'];
 
-  // Source 2: path query param (alternative name)
+  // Source 3: path query param (alternative name)
   const pathParam = req.query.path;
 
-  // Source 3: Parse from req.url
+  // Source 4: Parse from req.url
   const urlParts = (req.url || '').split('?');
   const urlPath = urlParts[0];
 
-  if (typeof rewritePath === 'string' && rewritePath) {
+  if (typeof slugParam === 'string' && slugParam) {
+    path = '/api/' + slugParam;
+  } else if (Array.isArray(slugParam) && slugParam.length > 0) {
+    path = '/api/' + slugParam.join('/');
+  } else if (typeof rewritePath === 'string' && rewritePath) {
     path = '/api/' + rewritePath;
   } else if (Array.isArray(rewritePath) && rewritePath.length > 0) {
     path = '/api/' + rewritePath.join('/');
@@ -4038,8 +4045,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       path,
       url: req.url,
       method: req.method,
+      slug: req.query.slug,
       _path: req.query._path,
-      query: req.query
+      allQuery: req.query
     });
   } catch (error: any) {
     console.error('API Error:', error);
