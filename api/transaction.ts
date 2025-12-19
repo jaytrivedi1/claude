@@ -52,10 +52,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         // Get contact info
         if (transactions[0].contact_id) {
-          const contacts = await sql`SELECT name, display_name, email, address FROM contacts WHERE id = ${transactions[0].contact_id}`;
+          const contacts = await sql`SELECT name, email, address FROM contacts WHERE id = ${transactions[0].contact_id}`;
           if (contacts.length > 0) {
             transactions[0].contact_name = contacts[0].name;
-            transactions[0].contact_display_name = contacts[0].display_name;
             transactions[0].contact_email = contacts[0].email;
             transactions[0].contact_address = contacts[0].address;
           }

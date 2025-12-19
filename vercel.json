@@ -11,6 +11,10 @@
   },
   "rewrites": [
     {
+      "source": "/api/transactions/:id/payment-history",
+      "destination": "/api/payment-history?id=:id"
+    },
+    {
       "source": "/api/transactions/:id",
       "destination": "/api/transaction?id=:id"
     },
