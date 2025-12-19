@@ -116,15 +116,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end();
   }
 
-  // Get the path - handle various formats including Vercel rewrites
-  const url = req.url || '';
-  const urlParts = url.split('?');
-  const queryString = urlParts[1] || '';
-  const searchParams = new URLSearchParams(queryString);
+  // Get the path from Vercel catch-all route
+  // req.query.path will be an array like ['transactions', '1'] for /api/transactions/1
+  const pathSegments = req.query.path;
+  let path: string;
 
-  // Check if path is passed as query param (from Vercel rewrite)
-  const pathFromQuery = searchParams.get('path');
-  const path = pathFromQuery ? `/api/${pathFromQuery}` : urlParts[0];
+  if (Array.isArray(pathSegments)) {
+    path = '/api/' + pathSegments.join('/');
+  } else if (typeof pathSegments === 'string') {
+    path = '/api/' + pathSegments;
+  } else {
+    path = '/api';
+  }
 
   const userId = req.headers['x-user-id'] as string;
 
