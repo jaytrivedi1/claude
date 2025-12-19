@@ -378,7 +378,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (transactionIdMatch && req.method === 'GET') {
       const transactionId = parseInt(transactionIdMatch[1]);
       const transactions = await sql`
-        SELECT t.*, c.name as contact_name
+        SELECT t.*, c.name as contact_name, c.display_name as contact_display_name
         FROM transactions t
         LEFT JOIN contacts c ON t.contact_id = c.id
         WHERE t.id = ${transactionId}
@@ -386,10 +386,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (transactions.length === 0) {
         return res.status(404).json({ message: 'Transaction not found' });
       }
-      // Get line items
-      const lineItems = await sql`SELECT * FROM transaction_lines WHERE transaction_id = ${transactionId}`;
-      const result = { ...transformKeys(transactions[0]), lineItems: transformKeys(lineItems) };
-      return res.status(200).json(result);
+      // Get line items and ledger entries
+      const lineItems = await sql`SELECT * FROM line_items WHERE transaction_id = ${transactionId}`;
+      const ledgerEntries = await sql`SELECT * FROM ledger_entries WHERE transaction_id = ${transactionId}`;
+
+      return res.status(200).json({
+        transaction: transformKeys(transactions[0]),
+        lineItems: transformKeys(lineItems),
+        ledgerEntries: transformKeys(ledgerEntries)
+      });
     }
 
     // Get transaction payment history
@@ -579,7 +584,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (invoiceIdMatch && req.method === 'GET') {
       const invoiceId = parseInt(invoiceIdMatch[1]);
       const invoices = await sql`
-        SELECT t.*, c.name as contact_name
+        SELECT t.*, c.name as contact_name, c.display_name as contact_display_name
         FROM transactions t
         LEFT JOIN contacts c ON t.contact_id = c.id
         WHERE t.id = ${invoiceId} AND t.type = 'invoice'
@@ -587,10 +592,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (invoices.length === 0) {
         return res.status(404).json({ message: 'Invoice not found' });
       }
-      // Get line items
-      const lineItems = await sql`SELECT * FROM transaction_lines WHERE transaction_id = ${invoiceId}`;
-      const result = { ...transformKeys(invoices[0]), lineItems: transformKeys(lineItems) };
-      return res.status(200).json(result);
+      // Get line items and ledger entries
+      const lineItems = await sql`SELECT * FROM line_items WHERE transaction_id = ${invoiceId}`;
+      const ledgerEntries = await sql`SELECT * FROM ledger_entries WHERE transaction_id = ${invoiceId}`;
+
+      return res.status(200).json({
+        transaction: transformKeys(invoices[0]),
+        lineItems: transformKeys(lineItems),
+        ledgerEntries: transformKeys(ledgerEntries)
+      });
     }
 
     // Get invoice payment applications
@@ -808,7 +818,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(404).json({ message: 'Recurring transaction not found' });
       }
       // Get line items
-      const lines = await sql`SELECT * FROM recurring_transaction_lines WHERE recurring_transaction_id = ${recurringId}`;
+      const lines = await sql`SELECT * FROM recurring_lines WHERE recurring_transaction_id = ${recurringId}`;
       const result = { ...transformKeys(recurring[0]), lines: transformKeys(lines) };
       return res.status(200).json(result);
     }
@@ -1408,7 +1418,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(404).json({ message: 'Invoice not found or link has expired' });
       }
       const invoice = invoices[0];
-      const lineItems = await sql`SELECT * FROM transaction_lines WHERE transaction_id = ${invoice.id}`;
+      const lineItems = await sql`SELECT * FROM line_items WHERE transaction_id = ${invoice.id}`;
       const company = await sql`SELECT * FROM companies WHERE is_default = true LIMIT 1`;
 
       return res.status(200).json({
@@ -1477,7 +1487,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const quotation = quotations[0];
 
       // Get line items
-      const lineItems = await sql`SELECT * FROM transaction_lines WHERE transaction_id = ${quotationId}`;
+      const lineItems = await sql`SELECT * FROM line_items WHERE transaction_id = ${quotationId}`;
 
       // Generate new invoice number
       const lastInvoice = await sql`SELECT reference FROM transactions WHERE type = 'invoice' AND reference LIKE 'INV-%' ORDER BY id DESC LIMIT 1`;
@@ -1497,7 +1507,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Copy line items
       for (const item of lineItems) {
         await sql`
-          INSERT INTO transaction_lines (transaction_id, description, quantity, unit_price, amount, account_id, product_id, sales_tax_id)
+          INSERT INTO line_items (transaction_id, description, quantity, unit_price, amount, account_id, product_id, sales_tax_id)
           VALUES (${newInvoice[0].id}, ${item.description}, ${item.quantity}, ${item.unit_price}, ${item.amount}, ${item.account_id}, ${item.product_id}, ${item.sales_tax_id})
         `;
       }
@@ -2717,6 +2727,128 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(201).json({ id: result[0].id, success: true });
     }
 
+    // Update invoice (PATCH)
+    const invoicePatchMatch = path.match(/\/api\/invoices\/(\d+)$/);
+    if (invoicePatchMatch && req.method === 'PATCH') {
+      try {
+        const invoiceId = parseInt(invoicePatchMatch[1]);
+        const data = req.body;
+
+        // Fetch existing invoice
+        const existingInvoices = await sql`
+          SELECT * FROM transactions WHERE id = ${invoiceId} AND type = 'invoice'
+        `;
+
+        if (existingInvoices.length === 0) {
+          return res.status(404).json({ message: 'Invoice not found' });
+        }
+
+        const existingInvoice = existingInvoices[0];
+
+        // Calculate new amounts if line items provided
+        let newAmount = Number(existingInvoice.amount);
+        let newSubTotal = Number(existingInvoice.sub_total) || newAmount;
+        let newTaxAmount = Number(existingInvoice.tax_amount) || 0;
+        let newBalance = Number(existingInvoice.balance);
+
+        if (data.lineItems && Array.isArray(data.lineItems)) {
+          newSubTotal = data.lineItems.reduce((sum: number, item: any) => sum + (Number(item.amount) || 0), 0);
+          newTaxAmount = Number(data.taxAmount) || 0;
+          newAmount = newSubTotal + newTaxAmount;
+
+          // Adjust balance if invoice not fully paid
+          if (existingInvoice.status !== 'paid') {
+            const amountDiff = newAmount - Number(existingInvoice.amount);
+            newBalance = Math.max(0, Number(existingInvoice.balance) + amountDiff);
+          }
+        }
+
+        // Update the invoice with all fields
+        await sql`
+          UPDATE transactions SET
+            reference = ${data.reference !== undefined ? data.reference : existingInvoice.reference},
+            date = ${data.date !== undefined ? data.date : existingInvoice.date},
+            due_date = ${data.dueDate !== undefined ? data.dueDate : existingInvoice.due_date},
+            contact_id = ${data.contactId !== undefined ? data.contactId : existingInvoice.contact_id},
+            description = ${data.description !== undefined ? data.description : existingInvoice.description},
+            memo = ${data.memo !== undefined ? data.memo : existingInvoice.memo},
+            status = ${data.status !== undefined ? data.status : existingInvoice.status},
+            currency = ${data.currency !== undefined ? data.currency : existingInvoice.currency},
+            amount = ${newAmount},
+            sub_total = ${newSubTotal},
+            tax_amount = ${newTaxAmount},
+            balance = ${newBalance},
+            updated_at = NOW()
+          WHERE id = ${invoiceId}
+        `;
+
+        // Update line items if provided
+        if (data.lineItems && Array.isArray(data.lineItems)) {
+          // Delete existing line items
+          await sql`DELETE FROM line_items WHERE transaction_id = ${invoiceId}`;
+
+          // Insert new line items
+          for (const item of data.lineItems) {
+            await sql`
+              INSERT INTO line_items (transaction_id, description, quantity, unit_price, amount, sales_tax_id, product_id)
+              VALUES (${invoiceId}, ${item.description}, ${item.quantity || 1}, ${item.unitPrice || 0}, ${item.amount || 0}, ${item.salesTaxId || null}, ${item.productId || null})
+            `;
+          }
+
+          // Update ledger entries for the new amounts
+          await sql`DELETE FROM ledger_entries WHERE transaction_id = ${invoiceId}`;
+
+          // Get account IDs
+          const arAccount = await sql`SELECT id FROM accounts WHERE code = '1100' LIMIT 1`;
+          const revenueAccount = await sql`SELECT id FROM accounts WHERE code = '4000' LIMIT 1`;
+          const taxPayableAccount = await sql`SELECT id FROM accounts WHERE code = '2100' LIMIT 1`;
+
+          const invoiceDate = data.date || existingInvoice.date;
+          const invoiceRef = data.reference || existingInvoice.reference || `INV-${invoiceId}`;
+
+          if (arAccount.length > 0) {
+            await sql`
+              INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+              VALUES (${arAccount[0].id}, ${invoiceId}, ${`Invoice ${invoiceRef}`}, ${newAmount}, 0, ${invoiceDate})
+            `;
+          }
+
+          if (revenueAccount.length > 0) {
+            await sql`
+              INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+              VALUES (${revenueAccount[0].id}, ${invoiceId}, ${`Invoice ${invoiceRef} - Revenue`}, 0, ${newSubTotal}, ${invoiceDate})
+            `;
+          }
+
+          if (taxPayableAccount.length > 0 && newTaxAmount > 0) {
+            await sql`
+              INSERT INTO ledger_entries (account_id, transaction_id, description, debit, credit, date)
+              VALUES (${taxPayableAccount[0].id}, ${invoiceId}, ${`Invoice ${invoiceRef} - Tax`}, 0, ${newTaxAmount}, ${invoiceDate})
+            `;
+          }
+        }
+
+        // Fetch updated invoice with line items
+        const updatedInvoice = await sql`
+          SELECT t.*, c.name as contact_name
+          FROM transactions t
+          LEFT JOIN contacts c ON t.contact_id = c.id
+          WHERE t.id = ${invoiceId}
+        `;
+        const lineItems = await sql`SELECT * FROM line_items WHERE transaction_id = ${invoiceId}`;
+        const ledgerEntries = await sql`SELECT * FROM ledger_entries WHERE transaction_id = ${invoiceId}`;
+
+        return res.status(200).json({
+          transaction: transformKeys(updatedInvoice[0]),
+          lineItems: transformKeys(lineItems),
+          ledgerEntries: transformKeys(ledgerEntries)
+        });
+      } catch (error) {
+        console.error('Error updating invoice:', error);
+        return res.status(500).json({ message: 'Failed to update invoice' });
+      }
+    }
+
     // Create bill
     if ((path === '/api/bills' || path.endsWith('/bills')) && req.method === 'POST') {
       const data = req.body;
@@ -2831,7 +2963,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (data.lineItems && data.lineItems.length > 0) {
         for (const item of data.lineItems) {
           await sql`
-            INSERT INTO transaction_lines (transaction_id, description, quantity, unit_price, amount, account_id, sales_tax_id)
+            INSERT INTO line_items (transaction_id, description, quantity, unit_price, amount, account_id, sales_tax_id)
             VALUES (${txId}, ${item.description || ''}, ${item.quantity || 1}, ${item.unitPrice || item.amount}, ${item.amount}, ${item.accountId || null}, ${item.salesTaxId || null})
           `;
         }
@@ -2869,7 +3001,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (data.lineItems && data.lineItems.length > 0) {
         for (const item of data.lineItems) {
           await sql`
-            INSERT INTO transaction_lines (transaction_id, description, quantity, unit_price, amount, account_id, sales_tax_id)
+            INSERT INTO line_items (transaction_id, description, quantity, unit_price, amount, account_id, sales_tax_id)
             VALUES (${txId}, ${item.description || ''}, ${item.quantity || 1}, ${item.unitPrice || item.amount}, ${item.amount}, ${item.accountId || null}, ${item.salesTaxId || null})
           `;
         }
@@ -2907,7 +3039,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (data.lineItems && data.lineItems.length > 0) {
         for (const item of data.lineItems) {
           await sql`
-            INSERT INTO transaction_lines (transaction_id, description, quantity, unit_price, amount, account_id, sales_tax_id)
+            INSERT INTO line_items (transaction_id, description, quantity, unit_price, amount, account_id, sales_tax_id)
             VALUES (${txId}, ${item.description || ''}, ${item.quantity || 1}, ${item.unitPrice || item.amount}, ${item.amount}, ${item.accountId || null}, ${item.salesTaxId || null})
           `;
 
