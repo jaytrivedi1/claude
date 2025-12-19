@@ -11,6 +11,18 @@
   },
   "rewrites": [
     {
+      "source": "/api/transactions/:id",
+      "destination": "/api/transaction?id=:id"
+    },
+    {
+      "source": "/api/transactions",
+      "destination": "/api/transaction"
+    },
+    {
+      "source": "/api/invoices/:id",
+      "destination": "/api/invoice?id=:id"
+    },
+    {
       "source": "/((?!api).*)",
       "destination": "/index.html"
     }
