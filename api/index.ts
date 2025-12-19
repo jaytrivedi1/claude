@@ -3727,23 +3727,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(transformKeys({ ...invoices[0], lineItems }));
     }
 
-    // Public invoice (for sharing)
-    const publicInvoiceMatch = path.match(/\/api\/invoices\/public\/([^/]+)$/);
-    if (publicInvoiceMatch && req.method === 'GET') {
-      const token = publicInvoiceMatch[1];
-      const invoices = await sql`
-        SELECT t.*, c.name as contact_name, c.email as contact_email, c.address as contact_address
-        FROM transactions t
-        LEFT JOIN contacts c ON t.contact_id = c.id
-        WHERE t.public_token = ${token} AND t.type = 'invoice'
-      `;
-      if (invoices.length === 0) {
-        return res.status(404).json({ message: 'Invoice not found' });
-      }
-      const lineItems = await sql`SELECT * FROM line_items WHERE transaction_id = ${invoices[0].id}`;
-      return res.status(200).json(transformKeys({ ...invoices[0], lineItems }));
-    }
-
     return res.status(404).json({ message: 'Not found', path, url: req.url });
   } catch (error: any) {
     console.error('API Error:', error);
