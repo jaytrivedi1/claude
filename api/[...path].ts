@@ -116,18 +116,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end();
   }
 
-  // Get the path from Vercel's optional catch-all route
-  // For api/[[...slug]].ts:
-  // - /api → req.query.slug is undefined
-  // - /api/login → req.query.slug = ['login']
-  // - /api/transactions/1 → req.query.slug = ['transactions', '1']
+  // Get the path from Vercel's catch-all route
+  // For api/[...path].ts:
+  // - /api/login → req.query.path = ['login']
+  // - /api/transactions/1 → req.query.path = ['transactions', '1']
   let path: string;
 
-  const slug = req.query.slug;
-  if (Array.isArray(slug) && slug.length > 0) {
-    path = '/api/' + slug.join('/');
-  } else if (typeof slug === 'string') {
-    path = '/api/' + slug;
+  const pathSegments = req.query.path;
+  if (Array.isArray(pathSegments) && pathSegments.length > 0) {
+    path = '/api/' + pathSegments.join('/');
+  } else if (typeof pathSegments === 'string') {
+    path = '/api/' + pathSegments;
   } else {
     path = '/api';
   }
@@ -149,7 +148,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         path,
         url: req.url,
         method: req.method,
-        slug: req.query.slug
+        pathSegments: req.query.path
       });
     }
 
@@ -4008,7 +4007,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       path,
       url: req.url,
       method: req.method,
-      slug: req.query.slug
+      pathSegments: req.query.path
     });
   } catch (error: any) {
     console.error('API Error:', error);
