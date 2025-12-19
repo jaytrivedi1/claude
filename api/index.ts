@@ -726,6 +726,173 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
+    // General Ledger report
+    if ((path === '/api/reports/general-ledger' || path.endsWith('/general-ledger')) && req.method === 'GET') {
+      const startDateStr = req.query.startDate as string | undefined;
+      const endDateStr = req.query.endDate as string | undefined;
+
+      let ledgerEntries;
+      if (startDateStr && endDateStr) {
+        ledgerEntries = await sql`
+          SELECT le.*, a.code as account_code, a.name as account_name, a.type as account_type,
+                 t.type as transaction_type, t.reference as transaction_reference, t.date as transaction_date, t.status as transaction_status
+          FROM ledger_entries le
+          LEFT JOIN accounts a ON le.account_id = a.id
+          LEFT JOIN transactions t ON le.transaction_id = t.id
+          WHERE le.date >= ${startDateStr}::date AND le.date <= ${endDateStr}::date
+          ORDER BY le.date, le.id
+        `;
+      } else {
+        ledgerEntries = await sql`
+          SELECT le.*, a.code as account_code, a.name as account_name, a.type as account_type,
+                 t.type as transaction_type, t.reference as transaction_reference, t.date as transaction_date, t.status as transaction_status
+          FROM ledger_entries le
+          LEFT JOIN accounts a ON le.account_id = a.id
+          LEFT JOIN transactions t ON le.transaction_id = t.id
+          ORDER BY le.date, le.id
+        `;
+      }
+
+      const enrichedEntries = ledgerEntries.map((entry: any) => ({
+        id: entry.id,
+        date: entry.date,
+        accountId: entry.account_id,
+        transactionId: entry.transaction_id,
+        debit: entry.debit,
+        credit: entry.credit,
+        memo: entry.memo,
+        account: entry.account_code ? {
+          id: entry.account_id,
+          code: entry.account_code,
+          name: entry.account_name,
+          type: entry.account_type
+        } : null,
+        transaction: entry.transaction_type ? {
+          id: entry.transaction_id,
+          type: entry.transaction_type,
+          reference: entry.transaction_reference,
+          date: entry.transaction_date,
+          status: entry.transaction_status
+        } : null
+      }));
+
+      return res.status(200).json(enrichedEntries);
+    }
+
+    // General Ledger Grouped report
+    if ((path === '/api/reports/general-ledger-grouped' || path.endsWith('/general-ledger-grouped')) && req.method === 'GET') {
+      const startDateStr = req.query.startDate as string | undefined;
+      const endDateStr = req.query.endDate as string | undefined;
+      const accountIdStr = req.query.accountId as string | undefined;
+
+      if (!startDateStr || !endDateStr) {
+        return res.status(400).json({ message: "startDate and endDate are required" });
+      }
+
+      // Get all accounts
+      let accounts;
+      if (accountIdStr) {
+        accounts = await sql`SELECT * FROM accounts WHERE id = ${parseInt(accountIdStr)} AND is_active = true`;
+      } else {
+        accounts = await sql`SELECT * FROM accounts WHERE is_active = true ORDER BY code`;
+      }
+
+      // Get all ledger entries with transaction and contact info
+      const allEntries = await sql`
+        SELECT le.*, t.type as tx_type, t.reference as tx_reference, t.memo as tx_memo, t.contact_id,
+               c.name as contact_name, c.display_name as contact_display_name
+        FROM ledger_entries le
+        LEFT JOIN transactions t ON le.transaction_id = t.id
+        LEFT JOIN contacts c ON t.contact_id = c.id
+        ORDER BY le.date, le.transaction_id, le.id
+      `;
+
+      const accountGroups = accounts.map((account: any) => {
+        // Calculate beginning balance (entries before start date)
+        const beginningEntries = allEntries.filter((e: any) =>
+          e.account_id === account.id && new Date(e.date) < new Date(startDateStr)
+        );
+        let beginningBalance = 0;
+        beginningEntries.forEach((e: any) => {
+          beginningBalance += Number(e.debit || 0) - Number(e.credit || 0);
+        });
+
+        // Get entries within date range
+        const periodEntries = allEntries.filter((e: any) =>
+          e.account_id === account.id &&
+          new Date(e.date) >= new Date(startDateStr) &&
+          new Date(e.date) <= new Date(endDateStr)
+        );
+
+        // Calculate running balance and enrich entries
+        let runningBalance = beginningBalance;
+        const enrichedEntries = periodEntries.map((entry: any) => {
+          const debit = Number(entry.debit || 0);
+          const credit = Number(entry.credit || 0);
+          runningBalance += debit - credit;
+
+          // Find split account
+          const otherEntry = allEntries.find((e: any) =>
+            e.transaction_id === entry.transaction_id && e.id !== entry.id
+          );
+          const splitAccountName = otherEntry ?
+            accounts.find((a: any) => a.id === otherEntry.account_id)?.name || 'Split' : 'Split';
+
+          return {
+            id: entry.id,
+            date: entry.date,
+            transactionId: entry.transaction_id,
+            transactionType: entry.tx_type || '',
+            transactionReference: entry.tx_reference || '',
+            contactName: entry.contact_display_name || entry.contact_name || '',
+            memo: entry.tx_memo || entry.memo || '',
+            splitAccountName,
+            debit,
+            credit,
+            amount: debit > 0 ? debit : -credit,
+            runningBalance
+          };
+        });
+
+        const totalDebit = periodEntries.reduce((sum: number, e: any) => sum + Number(e.debit || 0), 0);
+        const totalCredit = periodEntries.reduce((sum: number, e: any) => sum + Number(e.credit || 0), 0);
+        const accountTotal = totalDebit - totalCredit;
+
+        return {
+          account: {
+            id: account.id,
+            code: account.code,
+            name: account.name,
+            type: account.type,
+            currency: account.currency || null
+          },
+          beginningBalance,
+          entries: enrichedEntries,
+          totalDebit,
+          totalCredit,
+          accountTotal,
+          endingBalance: beginningBalance + accountTotal
+        };
+      });
+
+      // Filter out accounts with no activity
+      const accountsWithActivity = accountGroups.filter((g: any) =>
+        g.beginningBalance !== 0 || g.entries.length > 0
+      );
+
+      const grandTotalDebit = accountsWithActivity.reduce((sum: number, g: any) => sum + g.totalDebit, 0);
+      const grandTotalCredit = accountsWithActivity.reduce((sum: number, g: any) => sum + g.totalCredit, 0);
+
+      return res.status(200).json({
+        startDate: startDateStr,
+        endDate: endDateStr,
+        accountGroups: accountsWithActivity,
+        grandTotalDebit,
+        grandTotalCredit,
+        totalAccounts: accountsWithActivity.length
+      });
+    }
+
     // Activity logs
     if ((path === '/api/activity-logs' || path.endsWith('/activity-logs')) && req.method === 'GET') {
       return res.status(200).json([]);
