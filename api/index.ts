@@ -116,19 +116,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end();
   }
 
-  // Get the path from Vercel's catch-all route
-  // For api/[...path].ts:
-  // - /api/login → req.query.path = ['login']
-  // - /api/transactions/1 → req.query.path = ['transactions', '1']
+  // Get the path from Vercel rewrite query parameter
+  // The rewrite rule passes /api/:path* as ?_path=:path*
+  // So /api/login becomes ?_path=login
   let path: string;
 
-  const pathSegments = req.query.path;
-  if (Array.isArray(pathSegments) && pathSegments.length > 0) {
-    path = '/api/' + pathSegments.join('/');
-  } else if (typeof pathSegments === 'string') {
-    path = '/api/' + pathSegments;
+  // Try _path query param from rewrite
+  const rewritePath = req.query._path || req.query['_path'];
+  if (typeof rewritePath === 'string' && rewritePath) {
+    path = '/api/' + rewritePath;
+  } else if (Array.isArray(rewritePath) && rewritePath.length > 0) {
+    path = '/api/' + rewritePath.join('/');
   } else {
-    path = '/api';
+    // Fallback: try to parse from req.url
+    const urlPath = (req.url || '').split('?')[0];
+    if (urlPath && urlPath !== '/api' && urlPath.startsWith('/api/')) {
+      path = urlPath;
+    } else {
+      path = '/api';
+    }
   }
 
   const userId = req.headers['x-user-id'] as string;
@@ -148,7 +154,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         path,
         url: req.url,
         method: req.method,
-        pathSegments: req.query.path
+        _path: req.query._path,
+        query: req.query
       });
     }
 
@@ -4007,7 +4014,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       path,
       url: req.url,
       method: req.method,
-      pathSegments: req.query.path
+      _path: req.query._path,
+      query: req.query
     });
   } catch (error: any) {
     console.error('API Error:', error);
