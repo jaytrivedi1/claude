@@ -298,6 +298,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(transformKeys(accounts));
     }
 
+    // Get single account by ID
+    const accountIdMatch = path.match(/\/api\/accounts\/(\d+)$/);
+    if (accountIdMatch && req.method === 'GET') {
+      const accountId = parseInt(accountIdMatch[1]);
+      const accounts = await sql`SELECT * FROM accounts WHERE id = ${accountId}`;
+      if (accounts.length === 0) {
+        return res.status(404).json({ message: 'Account not found' });
+      }
+      return res.status(200).json(transformKeys(accounts[0]));
+    }
+
+    // Get account ledger entries
+    const accountLedgerMatch = path.match(/\/api\/accounts\/(\d+)\/ledger$/);
+    if (accountLedgerMatch && req.method === 'GET') {
+      const accountId = parseInt(accountLedgerMatch[1]);
+      const startDate = req.query.startDate as string | undefined;
+      const endDate = req.query.endDate as string | undefined;
+
+      let entries;
+      if (startDate && endDate) {
+        entries = await sql`
+          SELECT le.*, t.type as transaction_type, t.reference, t.memo as transaction_memo,
+                 c.name as contact_name, c.display_name as contact_display_name
+          FROM ledger_entries le
+          LEFT JOIN transactions t ON le.transaction_id = t.id
+          LEFT JOIN contacts c ON t.contact_id = c.id
+          WHERE le.account_id = ${accountId}
+          AND le.date >= ${startDate}::date AND le.date <= ${endDate}::date
+          ORDER BY le.date, le.id
+        `;
+      } else {
+        entries = await sql`
+          SELECT le.*, t.type as transaction_type, t.reference, t.memo as transaction_memo,
+                 c.name as contact_name, c.display_name as contact_display_name
+          FROM ledger_entries le
+          LEFT JOIN transactions t ON le.transaction_id = t.id
+          LEFT JOIN contacts c ON t.contact_id = c.id
+          WHERE le.account_id = ${accountId}
+          ORDER BY le.date, le.id
+        `;
+      }
+      return res.status(200).json(transformKeys(entries));
+    }
+
     // Get transactions
     if ((path === '/api/transactions' || path.endsWith('/transactions')) && req.method === 'GET') {
       const transactions = await sql`
@@ -310,10 +354,87 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(transformKeys(transactions));
     }
 
+    // Get next transaction reference number
+    if ((path === '/api/transactions/next-reference' || path.endsWith('/transactions/next-reference')) && req.method === 'GET') {
+      const type = req.query.type as string || 'TXN';
+      const prefix = type.toUpperCase().substring(0, 3);
+      const result = await sql`
+        SELECT reference FROM transactions
+        WHERE reference LIKE ${prefix + '-%'}
+        ORDER BY id DESC LIMIT 1
+      `;
+      let nextNumber = 1001;
+      if (result.length > 0 && result[0].reference) {
+        const match = result[0].reference.match(new RegExp(`${prefix}-(\\d+)`));
+        if (match) {
+          nextNumber = parseInt(match[1]) + 1;
+        }
+      }
+      return res.status(200).json({ nextReference: `${prefix}-${nextNumber}` });
+    }
+
+    // Get single transaction by ID
+    const transactionIdMatch = path.match(/\/api\/transactions\/(\d+)$/);
+    if (transactionIdMatch && req.method === 'GET') {
+      const transactionId = parseInt(transactionIdMatch[1]);
+      const transactions = await sql`
+        SELECT t.*, c.name as contact_name
+        FROM transactions t
+        LEFT JOIN contacts c ON t.contact_id = c.id
+        WHERE t.id = ${transactionId}
+      `;
+      if (transactions.length === 0) {
+        return res.status(404).json({ message: 'Transaction not found' });
+      }
+      // Get line items
+      const lineItems = await sql`SELECT * FROM transaction_lines WHERE transaction_id = ${transactionId}`;
+      const result = { ...transformKeys(transactions[0]), lineItems: transformKeys(lineItems) };
+      return res.status(200).json(result);
+    }
+
+    // Get transaction payment history
+    const paymentHistoryMatch = path.match(/\/api\/transactions\/(\d+)\/payment-history$/);
+    if (paymentHistoryMatch && req.method === 'GET') {
+      const transactionId = parseInt(paymentHistoryMatch[1]);
+      const payments = await sql`
+        SELECT p.*, t.reference, t.date as payment_date
+        FROM payment_applications p
+        JOIN transactions t ON p.payment_id = t.id
+        WHERE p.invoice_id = ${transactionId} OR p.bill_id = ${transactionId}
+        ORDER BY t.date DESC
+      `;
+      return res.status(200).json(transformKeys(payments));
+    }
+
     // Get contacts
     if ((path === '/api/contacts' || path.endsWith('/contacts')) && req.method === 'GET') {
       const contacts = await sql`SELECT * FROM contacts ORDER BY name`;
       return res.status(200).json(transformKeys(contacts));
+    }
+
+    // Get single contact by ID
+    const contactIdMatch = path.match(/\/api\/contacts\/(\d+)$/);
+    if (contactIdMatch && req.method === 'GET') {
+      const contactId = parseInt(contactIdMatch[1]);
+      const contacts = await sql`SELECT * FROM contacts WHERE id = ${contactId}`;
+      if (contacts.length === 0) {
+        return res.status(404).json({ message: 'Contact not found' });
+      }
+      return res.status(200).json(transformKeys(contacts[0]));
+    }
+
+    // Get contact transactions
+    const contactTransactionsMatch = path.match(/\/api\/contacts\/(\d+)\/transactions$/);
+    if (contactTransactionsMatch && req.method === 'GET') {
+      const contactId = parseInt(contactTransactionsMatch[1]);
+      const transactions = await sql`
+        SELECT t.*, c.name as contact_name
+        FROM transactions t
+        LEFT JOIN contacts c ON t.contact_id = c.id
+        WHERE t.contact_id = ${contactId}
+        ORDER BY t.date DESC
+      `;
+      return res.status(200).json(transformKeys(transactions));
     }
 
     // Get preferences
@@ -330,20 +451,62 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Search endpoint (return empty for now)
-    if (path.startsWith('/api/search')) {
+    // Search endpoint
+    if (path === '/api/search' && req.method === 'GET') {
+      const query = (req.query.q as string || '').trim();
+      if (!query) {
+        return res.status(200).json({ transactions: [], contacts: [], accounts: [], products: [] });
+      }
+      const searchPattern = `%${query}%`;
+
+      const [transactions, contacts, accounts, products] = await Promise.all([
+        sql`SELECT t.*, c.name as contact_name FROM transactions t
+            LEFT JOIN contacts c ON t.contact_id = c.id
+            WHERE t.reference ILIKE ${searchPattern} OR t.memo ILIKE ${searchPattern}
+            ORDER BY t.date DESC LIMIT 20`,
+        sql`SELECT * FROM contacts WHERE name ILIKE ${searchPattern} OR email ILIKE ${searchPattern}
+            ORDER BY name LIMIT 20`,
+        sql`SELECT * FROM accounts WHERE name ILIKE ${searchPattern} OR code ILIKE ${searchPattern}
+            ORDER BY code LIMIT 20`,
+        sql`SELECT * FROM products WHERE name ILIKE ${searchPattern} OR sku ILIKE ${searchPattern}
+            ORDER BY name LIMIT 20`
+      ]);
+
       return res.status(200).json({
-        transactions: [],
-        contacts: [],
-        accounts: [],
-        products: []
+        transactions: transformKeys(transactions),
+        contacts: transformKeys(contacts),
+        accounts: transformKeys(accounts),
+        products: transformKeys(products)
       });
+    }
+
+    // Search recent transactions
+    if (path === '/api/search/recent' && req.method === 'GET') {
+      const limit = parseInt(req.query.limit as string) || 5;
+      const transactions = await sql`
+        SELECT t.*, c.name as contact_name FROM transactions t
+        LEFT JOIN contacts c ON t.contact_id = c.id
+        ORDER BY t.updated_at DESC, t.created_at DESC
+        LIMIT ${limit}
+      `;
+      return res.status(200).json(transformKeys(transactions));
     }
 
     // Get sales taxes
     if ((path === '/api/sales-taxes' || path.endsWith('/sales-taxes')) && req.method === 'GET') {
       const salesTaxes = await sql`SELECT * FROM sales_taxes ORDER BY name`;
       return res.status(200).json(transformKeys(salesTaxes));
+    }
+
+    // Get single sales tax by ID
+    const salesTaxIdMatch = path.match(/\/api\/sales-taxes\/(\d+)$/);
+    if (salesTaxIdMatch && req.method === 'GET') {
+      const taxId = parseInt(salesTaxIdMatch[1]);
+      const taxes = await sql`SELECT * FROM sales_taxes WHERE id = ${taxId}`;
+      if (taxes.length === 0) {
+        return res.status(404).json({ message: 'Sales tax not found' });
+      }
+      return res.status(200).json(transformKeys(taxes[0]));
     }
 
     // Get account balances report
@@ -366,6 +529,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if ((path === '/api/products' || path.endsWith('/products')) && req.method === 'GET') {
       const products = await sql`SELECT * FROM products WHERE is_active = true ORDER BY name`;
       return res.status(200).json(transformKeys(products));
+    }
+
+    // Get single product by ID
+    const productIdMatch = path.match(/\/api\/products\/(\d+)$/);
+    if (productIdMatch && req.method === 'GET') {
+      const productId = parseInt(productIdMatch[1]);
+      const products = await sql`SELECT * FROM products WHERE id = ${productId}`;
+      if (products.length === 0) {
+        return res.status(404).json({ message: 'Product not found' });
+      }
+      return res.status(200).json(transformKeys(products[0]));
     }
 
     // Delete transaction
@@ -398,6 +572,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ORDER BY t.date DESC
       `;
       return res.status(200).json(transformKeys(invoices));
+    }
+
+    // Get single invoice by ID
+    const invoiceIdMatch = path.match(/\/api\/invoices\/(\d+)$/);
+    if (invoiceIdMatch && req.method === 'GET') {
+      const invoiceId = parseInt(invoiceIdMatch[1]);
+      const invoices = await sql`
+        SELECT t.*, c.name as contact_name
+        FROM transactions t
+        LEFT JOIN contacts c ON t.contact_id = c.id
+        WHERE t.id = ${invoiceId} AND t.type = 'invoice'
+      `;
+      if (invoices.length === 0) {
+        return res.status(404).json({ message: 'Invoice not found' });
+      }
+      // Get line items
+      const lineItems = await sql`SELECT * FROM transaction_lines WHERE transaction_id = ${invoiceId}`;
+      const result = { ...transformKeys(invoices[0]), lineItems: transformKeys(lineItems) };
+      return res.status(200).json(result);
+    }
+
+    // Get invoice payment applications
+    const invoicePaymentsMatch = path.match(/\/api\/invoices\/(\d+)\/payment-applications$/);
+    if (invoicePaymentsMatch && req.method === 'GET') {
+      const invoiceId = parseInt(invoicePaymentsMatch[1]);
+      const payments = await sql`
+        SELECT pa.*, t.reference as payment_reference, t.date as payment_date, t.amount as payment_amount
+        FROM payment_applications pa
+        JOIN transactions t ON pa.payment_id = t.id
+        WHERE pa.invoice_id = ${invoiceId}
+        ORDER BY t.date DESC
+      `;
+      return res.status(200).json(transformKeys(payments));
     }
 
     // Get next invoice number
@@ -468,13 +675,58 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(transformKeys(recurring));
     }
 
+    // Get single recurring transaction by ID
+    const recurringIdMatch = path.match(/\/api\/recurring\/(\d+)$/);
+    if (recurringIdMatch && req.method === 'GET') {
+      const recurringId = parseInt(recurringIdMatch[1]);
+      const recurring = await sql`SELECT * FROM recurring_transactions WHERE id = ${recurringId}`;
+      if (recurring.length === 0) {
+        return res.status(404).json({ message: 'Recurring transaction not found' });
+      }
+      // Get line items
+      const lines = await sql`SELECT * FROM recurring_transaction_lines WHERE recurring_transaction_id = ${recurringId}`;
+      const result = { ...transformKeys(recurring[0]), lines: transformKeys(lines) };
+      return res.status(200).json(result);
+    }
+
     // Get company settings
-    if ((path === '/api/companies/settings' || path.endsWith('/companies/settings')) && req.method === 'GET') {
+    if ((path === '/api/companies/settings' || path === '/api/settings/company' || path.endsWith('/companies/settings') || path.endsWith('/settings/company')) && req.method === 'GET') {
+      const companies = await sql`SELECT * FROM companies WHERE is_default = true LIMIT 1`;
+      if (companies.length > 0) {
+        return res.status(200).json(transformKeys(companies[0]));
+      }
+      // Fallback to preferences
       const prefs = await sql`SELECT * FROM preferences LIMIT 1`;
       if (prefs.length > 0) {
         return res.status(200).json(transformKeys(prefs[0]));
       }
-      return res.status(200).json({ homeCurrency: 'CAD', dateFormat: 'MM/DD/YYYY' });
+      return res.status(200).json({ name: 'My Company', homeCurrency: 'CAD', dateFormat: 'MM/DD/YYYY' });
+    }
+
+    // POST settings/company - update company settings
+    if ((path === '/api/settings/company' || path.endsWith('/settings/company')) && req.method === 'POST') {
+      const body = req.body;
+      const companies = await sql`SELECT * FROM companies WHERE is_default = true LIMIT 1`;
+      if (companies.length > 0) {
+        const updated = await sql`
+          UPDATE companies SET
+            name = COALESCE(${body.name}, name),
+            legal_name = COALESCE(${body.legalName}, legal_name),
+            email = COALESCE(${body.email}, email),
+            phone = COALESCE(${body.phone}, phone),
+            address = COALESCE(${body.address}, address),
+            city = COALESCE(${body.city}, city),
+            state = COALESCE(${body.state}, state),
+            postal_code = COALESCE(${body.postalCode}, postal_code),
+            country = COALESCE(${body.country}, country),
+            fiscal_year_start_month = COALESCE(${body.fiscalYearStartMonth}, fiscal_year_start_month),
+            updated_at = NOW()
+          WHERE is_default = true
+          RETURNING *
+        `;
+        return res.status(200).json(transformKeys(updated[0]));
+      }
+      return res.status(404).json({ message: 'No default company found' });
     }
 
     // Get currencies
@@ -944,7 +1196,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Reconciliations
     if ((path === '/api/reconciliations' || path.endsWith('/reconciliations')) && req.method === 'GET') {
-      return res.status(200).json([]);
+      const reconciliations = await sql`
+        SELECT r.*, a.name as account_name, a.code as account_code
+        FROM reconciliations r
+        LEFT JOIN accounts a ON r.account_id = a.id
+        ORDER BY r.created_at DESC
+      `;
+      return res.status(200).json(transformKeys(reconciliations));
+    }
+
+    // Get single reconciliation by ID
+    const reconciliationIdMatch = path.match(/\/api\/reconciliations\/(\d+)$/);
+    if (reconciliationIdMatch && req.method === 'GET') {
+      const reconciliationId = parseInt(reconciliationIdMatch[1]);
+      const reconciliations = await sql`
+        SELECT r.*, a.name as account_name, a.code as account_code
+        FROM reconciliations r
+        LEFT JOIN accounts a ON r.account_id = a.id
+        WHERE r.id = ${reconciliationId}
+      `;
+      if (reconciliations.length === 0) {
+        return res.status(404).json({ message: 'Reconciliation not found' });
+      }
+      // Get reconciliation items
+      const items = await sql`SELECT * FROM reconciliation_items WHERE reconciliation_id = ${reconciliationId}`;
+      const result = { ...transformKeys(reconciliations[0]), items: transformKeys(items) };
+      return res.status(200).json(result);
     }
 
     // Imported transactions
