@@ -116,25 +116,49 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end();
   }
 
-  // Get the path from Vercel rewrite query parameter
-  // The rewrite rule passes /api/:path* as ?_path=:path*
-  // So /api/login becomes ?_path=login
+  // DEBUG: Log all request info
+  const debugInfo = {
+    url: req.url,
+    method: req.method,
+    query: req.query,
+    headers: {
+      host: req.headers.host,
+      'x-forwarded-host': req.headers['x-forwarded-host'],
+      'x-vercel-forwarded-for': req.headers['x-vercel-forwarded-for'],
+    }
+  };
+
+  // If ?debug=1 is in the URL, return debug info
+  if (req.query.debug === '1') {
+    return res.status(200).json({ debug: true, ...debugInfo });
+  }
+
+  // Get the path - try multiple sources
   let path: string;
 
-  // Try _path query param from rewrite
+  // Source 1: _path query param from rewrite
   const rewritePath = req.query._path || req.query['_path'];
+
+  // Source 2: path query param (alternative name)
+  const pathParam = req.query.path;
+
+  // Source 3: Parse from req.url
+  const urlParts = (req.url || '').split('?');
+  const urlPath = urlParts[0];
+
   if (typeof rewritePath === 'string' && rewritePath) {
     path = '/api/' + rewritePath;
   } else if (Array.isArray(rewritePath) && rewritePath.length > 0) {
     path = '/api/' + rewritePath.join('/');
+  } else if (typeof pathParam === 'string' && pathParam) {
+    path = '/api/' + pathParam;
+  } else if (Array.isArray(pathParam) && pathParam.length > 0) {
+    path = '/api/' + pathParam.join('/');
+  } else if (urlPath && urlPath.startsWith('/api/') && urlPath !== '/api/') {
+    // req.url might contain the actual path
+    path = urlPath;
   } else {
-    // Fallback: try to parse from req.url
-    const urlPath = (req.url || '').split('?')[0];
-    if (urlPath && urlPath !== '/api' && urlPath.startsWith('/api/')) {
-      path = urlPath;
-    } else {
-      path = '/api';
-    }
+    path = '/api';
   }
 
   const userId = req.headers['x-user-id'] as string;
