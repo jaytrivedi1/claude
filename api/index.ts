@@ -116,16 +116,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end();
   }
 
-  // Get the path from Vercel catch-all route
-  // req.query.path will be an array like ['transactions', '1'] for /api/transactions/1
-  const pathSegments = req.query.path;
+  // Get the path from the apiPath query parameter (set by Vercel rewrite)
+  // The rewrite rule passes /api/:path* as ?apiPath=:path*
+  // So /api/login becomes ?apiPath=login
+  // And /api/transactions/1 becomes ?apiPath=transactions/1
   let path: string;
 
-  if (Array.isArray(pathSegments)) {
-    path = '/api/' + pathSegments.join('/');
-  } else if (typeof pathSegments === 'string') {
-    path = '/api/' + pathSegments;
+  const apiPath = req.query.apiPath;
+  if (typeof apiPath === 'string' && apiPath) {
+    // apiPath will be like "login" or "transactions/1" (without leading slash or /api)
+    path = '/api/' + apiPath;
+  } else if (Array.isArray(apiPath) && apiPath.length > 0) {
+    // In case it's an array (multiple segments captured)
+    path = '/api/' + apiPath.join('/');
   } else {
+    // Fallback: just /api
     path = '/api';
   }
 
@@ -141,7 +146,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     // Health check
     if (path === '/api' || path === '/api/' || path === '/api/health') {
-      return res.status(200).json({ status: 'ok', url: req.url, method: req.method });
+      return res.status(200).json({
+        status: 'ok',
+        path,
+        url: req.url,
+        method: req.method,
+        apiPathQuery: req.query.apiPath
+      });
     }
 
     // Login - match /api/login
