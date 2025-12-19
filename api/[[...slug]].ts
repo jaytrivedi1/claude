@@ -116,41 +116,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end();
   }
 
-  // Get the path from multiple sources (Vercel routing can behave differently)
-  // 1. Try apiPath query parameter (set by our rewrite rule)
-  // 2. Try req.url directly (may contain the original path)
-  // 3. Fallback to /api
+  // Get the path from Vercel's optional catch-all route
+  // For api/[[...slug]].ts:
+  // - /api → req.query.slug is undefined
+  // - /api/login → req.query.slug = ['login']
+  // - /api/transactions/1 → req.query.slug = ['transactions', '1']
   let path: string;
 
-  const apiPath = req.query.apiPath;
-  if (typeof apiPath === 'string' && apiPath) {
-    // apiPath will be like "login" or "transactions/1" (without leading slash or /api)
-    path = '/api/' + apiPath;
-  } else if (Array.isArray(apiPath) && apiPath.length > 0) {
-    // In case it's an array (multiple segments captured)
-    path = '/api/' + apiPath.join('/');
-  } else if (req.url) {
-    // Fallback: try to extract path from req.url
-    // req.url might be like "/api?apiPath=transactions/1" or just "/api/transactions/1"
-    const urlParts = req.url.split('?');
-    const urlPath = urlParts[0];
-
-    // Check if apiPath is in the query string
-    if (urlParts[1]) {
-      const params = new URLSearchParams(urlParts[1]);
-      const apiPathFromUrl = params.get('apiPath');
-      if (apiPathFromUrl) {
-        path = '/api/' + apiPathFromUrl;
-      } else if (urlPath.startsWith('/api')) {
-        path = urlPath;
-      } else {
-        path = '/api';
-      }
-    } else if (urlPath.startsWith('/api')) {
-      path = urlPath;
-    } else {
-      path = '/api';
-    }
+  const slug = req.query.slug;
+  if (Array.isArray(slug) && slug.length > 0) {
+    path = '/api/' + slug.join('/');
+  } else if (typeof slug === 'string') {
+    path = '/api/' + slug;
   } else {
     path = '/api';
   }
@@ -172,7 +149,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         path,
         url: req.url,
         method: req.method,
-        apiPathQuery: req.query.apiPath
+        slug: req.query.slug
       });
     }
 
@@ -4031,7 +4008,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       path,
       url: req.url,
       method: req.method,
-      apiPathQuery: req.query.apiPath
+      slug: req.query.slug
     });
   } catch (error: any) {
     console.error('API Error:', error);
