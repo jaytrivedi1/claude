@@ -652,7 +652,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           LEFT JOIN accounts a ON le.account_id = a.id
           LEFT JOIN transactions t ON le.transaction_id = t.id
           LEFT JOIN contacts c ON t.contact_id = c.id
-          WHERE le.date >= ${startDateStr}::date AND le.date <= ${endDateStr}::date
+          WHERE le.date::date >= ${startDateStr}::date AND le.date::date <= ${endDateStr}::date
             AND le.account_id = ${parseInt(accountIdStr)}
           ORDER BY le.date, le.transaction_id, le.id
         `;
@@ -665,7 +665,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           LEFT JOIN accounts a ON le.account_id = a.id
           LEFT JOIN transactions t ON le.transaction_id = t.id
           LEFT JOIN contacts c ON t.contact_id = c.id
-          WHERE le.date >= ${startDateStr}::date AND le.date <= ${endDateStr}::date
+          WHERE le.date::date >= ${startDateStr}::date AND le.date::date <= ${endDateStr}::date
           ORDER BY le.date, le.transaction_id, le.id
         `;
       } else if (accountIdStr) {
@@ -751,13 +751,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // For balance sheet accounts, calculate sum of all entries before the date
+      // Cast timestamp to date for reliable comparison
       const result = await sql`
         SELECT
           COALESCE(SUM(debit), 0) as total_debit,
           COALESCE(SUM(credit), 0) as total_credit
         FROM ledger_entries
         WHERE account_id = ${accountId}
-          AND date < ${beforeDateStr}::date
+          AND date::date < ${beforeDateStr}::date
       `;
 
       const totalDebit = Number(result[0]?.total_debit || 0);
@@ -1114,7 +1115,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           FROM ledger_entries le
           LEFT JOIN accounts a ON le.account_id = a.id
           LEFT JOIN transactions t ON le.transaction_id = t.id
-          WHERE le.date >= ${startDateStr}::date AND le.date <= ${endDateStr}::date
+          WHERE le.date::date >= ${startDateStr}::date AND le.date::date <= ${endDateStr}::date
           ORDER BY le.date, le.id
         `;
       } else {
@@ -1174,12 +1175,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const startDate = toDateString(startDateStr);
       const endDate = toDateString(endDateStr);
 
-      // Get all accounts
+      // Get all accounts (don't filter by is_active - match original behavior)
       let accounts;
       if (accountIdStr) {
-        accounts = await sql`SELECT * FROM accounts WHERE id = ${parseInt(accountIdStr)} AND is_active = true`;
+        accounts = await sql`SELECT * FROM accounts WHERE id = ${parseInt(accountIdStr)}`;
       } else {
-        accounts = await sql`SELECT * FROM accounts WHERE is_active = true ORDER BY code`;
+        accounts = await sql`SELECT * FROM accounts ORDER BY code`;
       }
 
       // Get all ledger entries with transaction and contact info using SQL date filtering
@@ -1198,19 +1199,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const accountGroups = await Promise.all(accounts.map(async (account: any) => {
         // Calculate beginning balance using SQL (entries before start date)
+        // Cast timestamp to date for reliable comparison
         const beginningResult = await sql`
           SELECT
             COALESCE(SUM(debit), 0) as total_debit,
             COALESCE(SUM(credit), 0) as total_credit
           FROM ledger_entries
           WHERE account_id = ${account.id}
-            AND date < ${startDate}::date
+            AND date::date < ${startDate}::date
         `;
         const beginningDebit = Number(beginningResult[0]?.total_debit || 0);
         const beginningCredit = Number(beginningResult[0]?.total_credit || 0);
         const beginningBalance = beginningDebit - beginningCredit;
 
         // Get entries within date range using SQL
+        // Cast timestamp to date for reliable date-only comparison
         const periodEntries = await sql`
           SELECT le.*, t.type as tx_type, t.reference as tx_reference, t.memo as tx_memo, t.contact_id,
                  c.name as contact_name, c.display_name as contact_display_name
@@ -1218,8 +1221,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           LEFT JOIN transactions t ON le.transaction_id = t.id
           LEFT JOIN contacts c ON t.contact_id = c.id
           WHERE le.account_id = ${account.id}
-            AND le.date >= ${startDate}::date
-            AND le.date <= ${endDate}::date
+            AND le.date::date >= ${startDate}::date
+            AND le.date::date <= ${endDate}::date
           ORDER BY le.date, le.transaction_id, le.id
         `;
 
