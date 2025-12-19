@@ -116,10 +116,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end();
   }
 
-  // Get the path from the apiPath query parameter (set by Vercel rewrite)
-  // The rewrite rule passes /api/:path* as ?apiPath=:path*
-  // So /api/login becomes ?apiPath=login
-  // And /api/transactions/1 becomes ?apiPath=transactions/1
+  // Get the path from multiple sources (Vercel routing can behave differently)
+  // 1. Try apiPath query parameter (set by our rewrite rule)
+  // 2. Try req.url directly (may contain the original path)
+  // 3. Fallback to /api
   let path: string;
 
   const apiPath = req.query.apiPath;
@@ -129,8 +129,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } else if (Array.isArray(apiPath) && apiPath.length > 0) {
     // In case it's an array (multiple segments captured)
     path = '/api/' + apiPath.join('/');
+  } else if (req.url) {
+    // Fallback: try to extract path from req.url
+    // req.url might be like "/api?apiPath=transactions/1" or just "/api/transactions/1"
+    const urlParts = req.url.split('?');
+    const urlPath = urlParts[0];
+
+    // Check if apiPath is in the query string
+    if (urlParts[1]) {
+      const params = new URLSearchParams(urlParts[1]);
+      const apiPathFromUrl = params.get('apiPath');
+      if (apiPathFromUrl) {
+        path = '/api/' + apiPathFromUrl;
+      } else if (urlPath.startsWith('/api')) {
+        path = urlPath;
+      } else {
+        path = '/api';
+      }
+    } else if (urlPath.startsWith('/api')) {
+      path = urlPath;
+    } else {
+      path = '/api';
+    }
   } else {
-    // Fallback: just /api
     path = '/api';
   }
 
@@ -4005,47 +4026,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ success: true });
     }
 
-    // Get single transaction
-    const getTransactionMatch = path.match(/\/api\/transactions\/(\d+)$/);
-    if (getTransactionMatch && req.method === 'GET') {
-      const transactionId = parseInt(getTransactionMatch[1]);
-      const transactions = await sql`
-        SELECT t.*, c.name as contact_name
-        FROM transactions t
-        LEFT JOIN contacts c ON t.contact_id = c.id
-        WHERE t.id = ${transactionId}
-      `;
-      if (transactions.length === 0) {
-        return res.status(404).json({ message: 'Transaction not found' });
-      }
-      // Get line items
-      const lineItems = await sql`SELECT * FROM line_items WHERE transaction_id = ${transactionId}`;
-      return res.status(200).json(transformKeys({ ...transactions[0], lineItems }));
-    }
-
-    // Get single invoice
-    const getInvoiceMatch = path.match(/\/api\/invoices\/(\d+)$/);
-    if (getInvoiceMatch && req.method === 'GET') {
-      const invoiceId = parseInt(getInvoiceMatch[1]);
-      const invoices = await sql`
-        SELECT t.*, c.name as contact_name, c.email as contact_email, c.address as contact_address
-        FROM transactions t
-        LEFT JOIN contacts c ON t.contact_id = c.id
-        WHERE t.id = ${invoiceId} AND t.type = 'invoice'
-      `;
-      if (invoices.length === 0) {
-        return res.status(404).json({ message: 'Invoice not found' });
-      }
-      const lineItems = await sql`SELECT * FROM line_items WHERE transaction_id = ${invoiceId}`;
-      return res.status(200).json(transformKeys({ ...invoices[0], lineItems }));
-    }
-
-    return res.status(404).json({ message: 'Not found', path, url: req.url });
+    return res.status(404).json({
+      message: 'Endpoint not found',
+      path,
+      url: req.url,
+      method: req.method,
+      apiPathQuery: req.query.apiPath
+    });
   } catch (error: any) {
     console.error('API Error:', error);
     return res.status(500).json({
       message: 'Server error',
-      error: error.message
+      error: error.message,
+      path
     });
   }
 }
