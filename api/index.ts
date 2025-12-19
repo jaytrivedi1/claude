@@ -3464,6 +3464,234 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json({ success: true });
     }
 
+    // ============================================
+    // PRODUCT CRUD
+    // ============================================
+
+    // Create product
+    if ((path === '/api/products' || path.endsWith('/products')) && req.method === 'POST') {
+      const data = req.body;
+      const result = await sql`
+        INSERT INTO products (name, sku, description, price, cost, income_account_id, expense_account_id, is_active)
+        VALUES (${data.name}, ${data.sku || null}, ${data.description || ''}, ${data.price || 0}, ${data.cost || 0}, ${data.incomeAccountId || null}, ${data.expenseAccountId || null}, true)
+        RETURNING *
+      `;
+      return res.status(201).json(transformKeys(result[0]));
+    }
+
+    // Update product
+    const updateProductMatch = path.match(/\/api\/products\/(\d+)$/);
+    if (updateProductMatch && (req.method === 'PUT' || req.method === 'PATCH')) {
+      const productId = parseInt(updateProductMatch[1]);
+      const data = req.body;
+      const result = await sql`
+        UPDATE products SET
+          name = COALESCE(${data.name}, name),
+          sku = COALESCE(${data.sku}, sku),
+          description = COALESCE(${data.description}, description),
+          price = COALESCE(${data.price}, price),
+          cost = COALESCE(${data.cost}, cost),
+          income_account_id = COALESCE(${data.incomeAccountId}, income_account_id),
+          expense_account_id = COALESCE(${data.expenseAccountId}, expense_account_id),
+          is_active = COALESCE(${data.isActive}, is_active),
+          updated_at = NOW()
+        WHERE id = ${productId}
+        RETURNING *
+      `;
+      if (result.length === 0) {
+        return res.status(404).json({ message: 'Product not found' });
+      }
+      return res.status(200).json(transformKeys(result[0]));
+    }
+
+    // Delete product
+    if (updateProductMatch && req.method === 'DELETE') {
+      const productId = parseInt(updateProductMatch[1]);
+      await sql`UPDATE products SET is_active = false WHERE id = ${productId}`;
+      return res.status(200).json({ success: true });
+    }
+
+    // ============================================
+    // SALES TAX CRUD
+    // ============================================
+
+    // Create sales tax
+    if ((path === '/api/sales-taxes' || path.endsWith('/sales-taxes')) && req.method === 'POST') {
+      const data = req.body;
+      const result = await sql`
+        INSERT INTO sales_taxes (name, rate, description, is_active)
+        VALUES (${data.name}, ${data.rate}, ${data.description || ''}, true)
+        RETURNING *
+      `;
+      return res.status(201).json(transformKeys(result[0]));
+    }
+
+    // Update sales tax
+    const updateSalesTaxMatch = path.match(/\/api\/sales-taxes\/(\d+)$/);
+    if (updateSalesTaxMatch && (req.method === 'PUT' || req.method === 'PATCH')) {
+      const taxId = parseInt(updateSalesTaxMatch[1]);
+      const data = req.body;
+      const result = await sql`
+        UPDATE sales_taxes SET
+          name = COALESCE(${data.name}, name),
+          rate = COALESCE(${data.rate}, rate),
+          description = COALESCE(${data.description}, description),
+          is_active = COALESCE(${data.isActive}, is_active),
+          updated_at = NOW()
+        WHERE id = ${taxId}
+        RETURNING *
+      `;
+      if (result.length === 0) {
+        return res.status(404).json({ message: 'Sales tax not found' });
+      }
+      return res.status(200).json(transformKeys(result[0]));
+    }
+
+    // Delete sales tax
+    if (updateSalesTaxMatch && req.method === 'DELETE') {
+      const taxId = parseInt(updateSalesTaxMatch[1]);
+      await sql`UPDATE sales_taxes SET is_active = false WHERE id = ${taxId}`;
+      return res.status(200).json({ success: true });
+    }
+
+    // ============================================
+    // RECURRING TRANSACTION CRUD
+    // ============================================
+
+    // Create recurring transaction
+    if ((path === '/api/recurring' || path.endsWith('/recurring')) && req.method === 'POST') {
+      const data = req.body;
+      const result = await sql`
+        INSERT INTO recurring_transactions (name, type, frequency, next_date, contact_id, amount, account_id, is_active)
+        VALUES (${data.name}, ${data.type}, ${data.frequency}, ${data.nextDate}, ${data.contactId || null}, ${data.amount || 0}, ${data.accountId || null}, true)
+        RETURNING *
+      `;
+      return res.status(201).json(transformKeys(result[0]));
+    }
+
+    // Update recurring transaction
+    const updateRecurringMatch = path.match(/\/api\/recurring\/(\d+)$/);
+    if (updateRecurringMatch && (req.method === 'PUT' || req.method === 'PATCH')) {
+      const recurringId = parseInt(updateRecurringMatch[1]);
+      const data = req.body;
+      const result = await sql`
+        UPDATE recurring_transactions SET
+          name = COALESCE(${data.name}, name),
+          type = COALESCE(${data.type}, type),
+          frequency = COALESCE(${data.frequency}, frequency),
+          next_date = COALESCE(${data.nextDate}, next_date),
+          contact_id = COALESCE(${data.contactId}, contact_id),
+          amount = COALESCE(${data.amount}, amount),
+          account_id = COALESCE(${data.accountId}, account_id),
+          is_active = COALESCE(${data.isActive}, is_active),
+          updated_at = NOW()
+        WHERE id = ${recurringId}
+        RETURNING *
+      `;
+      if (result.length === 0) {
+        return res.status(404).json({ message: 'Recurring transaction not found' });
+      }
+      return res.status(200).json(transformKeys(result[0]));
+    }
+
+    // Delete recurring transaction
+    if (updateRecurringMatch && req.method === 'DELETE') {
+      const recurringId = parseInt(updateRecurringMatch[1]);
+      await sql`UPDATE recurring_transactions SET is_active = false WHERE id = ${recurringId}`;
+      return res.status(200).json({ success: true });
+    }
+
+    // Pause recurring transaction
+    const pauseRecurringMatch = path.match(/\/api\/recurring\/(\d+)\/pause$/);
+    if (pauseRecurringMatch && req.method === 'POST') {
+      const recurringId = parseInt(pauseRecurringMatch[1]);
+      await sql`UPDATE recurring_transactions SET is_active = false WHERE id = ${recurringId}`;
+      return res.status(200).json({ success: true });
+    }
+
+    // Resume recurring transaction
+    const resumeRecurringMatch = path.match(/\/api\/recurring\/(\d+)\/resume$/);
+    if (resumeRecurringMatch && req.method === 'POST') {
+      const recurringId = parseInt(resumeRecurringMatch[1]);
+      await sql`UPDATE recurring_transactions SET is_active = true WHERE id = ${recurringId}`;
+      return res.status(200).json({ success: true });
+    }
+
+    // ============================================
+    // CATEGORIZATION RULES CRUD
+    // ============================================
+
+    // Get single categorization rule
+    const categorizationRuleIdMatch = path.match(/\/api\/categorization-rules\/(\d+)$/);
+    if (categorizationRuleIdMatch && req.method === 'GET') {
+      const ruleId = parseInt(categorizationRuleIdMatch[1]);
+      const rules = await sql`SELECT * FROM categorization_rules WHERE id = ${ruleId}`;
+      if (rules.length === 0) {
+        return res.status(404).json({ message: 'Categorization rule not found' });
+      }
+      return res.status(200).json(transformKeys(rules[0]));
+    }
+
+    // Create categorization rule
+    if ((path === '/api/categorization-rules' || path.endsWith('/categorization-rules')) && req.method === 'POST') {
+      const data = req.body;
+      const result = await sql`
+        INSERT INTO categorization_rules (name, pattern, account_id, is_active)
+        VALUES (${data.name}, ${data.pattern}, ${data.accountId}, true)
+        RETURNING *
+      `;
+      return res.status(201).json(transformKeys(result[0]));
+    }
+
+    // Update categorization rule
+    if (categorizationRuleIdMatch && req.method === 'PATCH') {
+      const ruleId = parseInt(categorizationRuleIdMatch[1]);
+      const data = req.body;
+      const result = await sql`
+        UPDATE categorization_rules SET
+          name = COALESCE(${data.name}, name),
+          pattern = COALESCE(${data.pattern}, pattern),
+          account_id = COALESCE(${data.accountId}, account_id),
+          is_active = COALESCE(${data.isActive}, is_active),
+          updated_at = NOW()
+        WHERE id = ${ruleId}
+        RETURNING *
+      `;
+      if (result.length === 0) {
+        return res.status(404).json({ message: 'Categorization rule not found' });
+      }
+      return res.status(200).json(transformKeys(result[0]));
+    }
+
+    // Delete categorization rule
+    if (categorizationRuleIdMatch && req.method === 'DELETE') {
+      const ruleId = parseInt(categorizationRuleIdMatch[1]);
+      await sql`DELETE FROM categorization_rules WHERE id = ${ruleId}`;
+      return res.status(200).json({ success: true });
+    }
+
+    // ============================================
+    // EXCHANGE RATE CRUD
+    // ============================================
+
+    // Get single exchange rate
+    const exchangeRateIdMatch = path.match(/\/api\/exchange-rates\/(\d+)$/);
+    if (exchangeRateIdMatch && req.method === 'GET') {
+      const rateId = parseInt(exchangeRateIdMatch[1]);
+      const rates = await sql`SELECT * FROM exchange_rates WHERE id = ${rateId}`;
+      if (rates.length === 0) {
+        return res.status(404).json({ message: 'Exchange rate not found' });
+      }
+      return res.status(200).json(transformKeys(rates[0]));
+    }
+
+    // Delete exchange rate
+    if (exchangeRateIdMatch && req.method === 'DELETE') {
+      const rateId = parseInt(exchangeRateIdMatch[1]);
+      await sql`DELETE FROM exchange_rates WHERE id = ${rateId}`;
+      return res.status(200).json({ success: true });
+    }
+
     // Get single transaction
     const getTransactionMatch = path.match(/\/api\/transactions\/(\d+)$/);
     if (getTransactionMatch && req.method === 'GET') {
