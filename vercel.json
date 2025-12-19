@@ -5,15 +5,11 @@
   "installCommand": "npm install",
   "framework": null,
   "functions": {
-    "api/index.ts": {
+    "api/**/*.ts": {
       "maxDuration": 30
     }
   },
   "rewrites": [
-    {
-      "source": "/api/:slug*",
-      "destination": "/api?slug=:slug*"
-    },
     {
       "source": "/((?!api).*)",
       "destination": "/index.html"
