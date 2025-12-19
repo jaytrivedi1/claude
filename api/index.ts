@@ -636,25 +636,148 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(200).json(transformKeys(bills));
     }
 
-    // Get ledger entries
+    // Get ledger entries with date filtering
     if ((path === '/api/ledger-entries' || path.endsWith('/ledger-entries')) && req.method === 'GET') {
-      const entries = await sql`
-        SELECT le.*, a.name as account_name, a.code as account_code, t.reference, t.type as transaction_type
-        FROM ledger_entries le
-        LEFT JOIN accounts a ON le.account_id = a.id
-        LEFT JOIN transactions t ON le.transaction_id = t.id
-        ORDER BY le.date DESC, le.id DESC
-        LIMIT 500
-      `;
-      return res.status(200).json(transformKeys(entries));
+      const startDateStr = req.query.startDate as string | undefined;
+      const endDateStr = req.query.endDate as string | undefined;
+      const accountIdStr = req.query.accountId as string | undefined;
+
+      let entries;
+      if (startDateStr && endDateStr && accountIdStr) {
+        entries = await sql`
+          SELECT le.*, a.name as account_name, a.code as account_code, a.type as account_type,
+                 t.reference, t.type as transaction_type, t.memo as transaction_memo,
+                 c.name as contact_name, c.display_name as contact_display_name
+          FROM ledger_entries le
+          LEFT JOIN accounts a ON le.account_id = a.id
+          LEFT JOIN transactions t ON le.transaction_id = t.id
+          LEFT JOIN contacts c ON t.contact_id = c.id
+          WHERE le.date >= ${startDateStr}::date AND le.date <= ${endDateStr}::date
+            AND le.account_id = ${parseInt(accountIdStr)}
+          ORDER BY le.date, le.transaction_id, le.id
+        `;
+      } else if (startDateStr && endDateStr) {
+        entries = await sql`
+          SELECT le.*, a.name as account_name, a.code as account_code, a.type as account_type,
+                 t.reference, t.type as transaction_type, t.memo as transaction_memo,
+                 c.name as contact_name, c.display_name as contact_display_name
+          FROM ledger_entries le
+          LEFT JOIN accounts a ON le.account_id = a.id
+          LEFT JOIN transactions t ON le.transaction_id = t.id
+          LEFT JOIN contacts c ON t.contact_id = c.id
+          WHERE le.date >= ${startDateStr}::date AND le.date <= ${endDateStr}::date
+          ORDER BY le.date, le.transaction_id, le.id
+        `;
+      } else if (accountIdStr) {
+        entries = await sql`
+          SELECT le.*, a.name as account_name, a.code as account_code, a.type as account_type,
+                 t.reference, t.type as transaction_type, t.memo as transaction_memo,
+                 c.name as contact_name, c.display_name as contact_display_name
+          FROM ledger_entries le
+          LEFT JOIN accounts a ON le.account_id = a.id
+          LEFT JOIN transactions t ON le.transaction_id = t.id
+          LEFT JOIN contacts c ON t.contact_id = c.id
+          WHERE le.account_id = ${parseInt(accountIdStr)}
+          ORDER BY le.date DESC, le.id DESC
+          LIMIT 500
+        `;
+      } else {
+        entries = await sql`
+          SELECT le.*, a.name as account_name, a.code as account_code, a.type as account_type,
+                 t.reference, t.type as transaction_type, t.memo as transaction_memo,
+                 c.name as contact_name, c.display_name as contact_display_name
+          FROM ledger_entries le
+          LEFT JOIN accounts a ON le.account_id = a.id
+          LEFT JOIN transactions t ON le.transaction_id = t.id
+          LEFT JOIN contacts c ON t.contact_id = c.id
+          ORDER BY le.date DESC, le.id DESC
+          LIMIT 500
+        `;
+      }
+
+      // Enrich entries with proper structure for frontend
+      const enrichedEntries = entries.map((entry: any) => ({
+        id: entry.id,
+        date: entry.date,
+        accountId: entry.account_id,
+        transactionId: entry.transaction_id,
+        debit: entry.debit,
+        credit: entry.credit,
+        memo: entry.memo,
+        description: entry.description,
+        account: {
+          id: entry.account_id,
+          code: entry.account_code,
+          name: entry.account_name,
+          type: entry.account_type
+        },
+        transaction: entry.transaction_type ? {
+          id: entry.transaction_id,
+          type: entry.transaction_type,
+          reference: entry.reference,
+          memo: entry.transaction_memo
+        } : null,
+        contactName: entry.contact_display_name || entry.contact_name || ''
+      }));
+
+      return res.status(200).json(enrichedEntries);
     }
 
-    // Get opening balance ledger entries
+    // Get opening balance for an account before a specific date
     if ((path === '/api/ledger-entries/opening-balance' || path.endsWith('/opening-balance')) && req.method === 'GET') {
-      const entries = await sql`
-        SELECT * FROM ledger_entries WHERE description LIKE '%Opening%' ORDER BY date DESC
+      const accountIdStr = req.query.accountId as string | undefined;
+      const beforeDateStr = req.query.beforeDate as string | undefined;
+
+      if (!accountIdStr || !beforeDateStr) {
+        return res.status(400).json({ message: "accountId and beforeDate are required" });
+      }
+
+      const accountId = parseInt(accountIdStr);
+
+      // Get the account to check its type
+      const accountResult = await sql`SELECT * FROM accounts WHERE id = ${accountId}`;
+      if (accountResult.length === 0) {
+        return res.status(404).json({ message: "Account not found" });
+      }
+      const account = accountResult[0];
+
+      // Income and expense accounts reset to $0 at start of each fiscal period
+      const isIncomeOrExpenseAccount = [
+        'income', 'other_income', 'expenses', 'other_expense', 'cost_of_goods_sold'
+      ].includes(account.type);
+
+      if (isIncomeOrExpenseAccount) {
+        return res.status(200).json({ openingBalance: 0 });
+      }
+
+      // For balance sheet accounts, calculate sum of all entries before the date
+      const result = await sql`
+        SELECT
+          COALESCE(SUM(debit), 0) as total_debit,
+          COALESCE(SUM(credit), 0) as total_credit
+        FROM ledger_entries
+        WHERE account_id = ${accountId}
+          AND date < ${beforeDateStr}::date
       `;
-      return res.status(200).json(transformKeys(entries));
+
+      const totalDebit = Number(result[0]?.total_debit || 0);
+      const totalCredit = Number(result[0]?.total_credit || 0);
+
+      // Determine if account is debit-normal or credit-normal
+      const creditNormalTypes = [
+        'accounts_payable', 'credit_card', 'current_liabilities', 'long_term_liabilities',
+        'other_current_liabilities', 'equity', 'retained_earnings', 'income', 'other_income'
+      ];
+      const isCreditNormal = creditNormalTypes.includes(account.type);
+
+      let openingBalance;
+      if (isCreditNormal) {
+        openingBalance = totalCredit - totalDebit;
+      } else {
+        openingBalance = totalDebit - totalCredit;
+      }
+
+      return res.status(200).json({ openingBalance });
     }
 
     // Get deposits
